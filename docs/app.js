@@ -121,10 +121,14 @@
   }
   function move(dir) {
     if (top().type === "image") { if (dir === "left" || dir === "right") stepImage(dir === "right" ? 1 : -1); return; }
-    const gs = groups(), cur = document.activeElement;
+    const gs = groups();
     if (!gs.length) return;
-    const gi = gs.findIndex((g) => g.includes(cur));
-    if (gi < 0) return focusEl((dir === "up" ? gs[gs.length - 1] : gs[0])[0], dir);
+    let cur = document.activeElement, gi = gs.findIndex((g) => g.includes(cur));
+    if (gi < 0) { // focus was lost (the glasses can drop it after Back): carry on from where you were, not the bottom
+      cur = anchor();
+      gi = gs.findIndex((g) => g.includes(cur));
+      if (gi < 0) return focusEl((dir === "up" ? gs[gs.length - 1] : gs[0])[0], dir);
+    }
     const g = gs[gi], ci = g.indexOf(cur);
     if (dir === "left" || dir === "right") return focusEl(g[ci + (dir === "right" ? 1 : -1)], dir);
     const sc = cur.closest(".scroll");
@@ -138,6 +142,24 @@
     const x = cx(cur);
     focusEl(ng.reduce((a, b) => (Math.abs(cx(b) - x) < Math.abs(cx(a) - x) ? b : a)), dir);
   }
+  // Where to resume when nothing is focused: the last remembered element if it is on screen, else the focusable
+  // nearest the middle of what is visible.
+  function anchor() {
+    const k = focusKey[top().type];
+    const byKey = k && $app.querySelector(`[data-k="${CSS.escape(k)}"]`);
+    const sc = $app.querySelector(".scroll");
+    if (!sc) return byKey || null;
+    const v = sc.getBoundingClientRect(), seen = (e) => { const r = e.getBoundingClientRect(); return r.bottom > v.top && r.top < v.bottom; };
+    if (byKey && seen(byKey)) return byKey;
+    let best = null, bd = Infinity;
+    for (const e of sc.querySelectorAll("[data-f]")) {
+      if (!seen(e)) continue;
+      const r = e.getBoundingClientRect(), d = Math.abs((r.top + r.bottom) / 2 - (v.top + v.bottom) / 2);
+      if (d < bd) { bd = d; best = e; }
+    }
+    return best || byKey || null;
+  }
+
   function restoreFocus(fallback) {
     const k = focusKey[top().type];
     const byKey = k && $app.querySelector(`[data-k="${CSS.escape(k)}"]`);
@@ -174,6 +196,8 @@
     render();
     if (top().type === "list") loadList();
     guard();
+    // the glasses may reset focus after their Back gesture: put it back where you were
+    requestAnimationFrame(() => setTimeout(() => { if (!$app.contains(document.activeElement)) { const a = anchor(); if (a) focusEl(a, null, false); } }, 0));
   }
   function go(screen) { stack.push(screen); render(); guard(); }
 
@@ -405,7 +429,10 @@
     if (!chat) return;
     const s = chat.session || { name: "Loading...", state: "idle", since: Date.now() };
     const sc = $app.querySelector(".scroll");
-    const atBottom = !sc || chat.atBottom !== false, prevTop = sc ? sc.scrollTop : 0;
+    // coming back from the image viewer: the old scroll element is gone, so use the position saved when it opened
+    const saved = chat.savedTop;
+    chat.savedTop = null;
+    const atBottom = saved == null && (!sc || chat.atBottom !== false), prevTop = saved != null ? saved : sc ? sc.scrollTop : 0;
     const pendingSent = (chat.sent || []).filter((m) => !m.delivered);
     const others = S.sessions.filter((x) => x.id !== chat.id && x.state === "waiting");
     let html = chat.start > 0 ? `<div class="note">swipe up for older messages</div>` : "";
@@ -492,6 +519,8 @@
     const list = [];
     for (const x of chat.items) for (const u of x.images || []) list.push(img(u));
     const idx = Math.max(0, list.indexOf(img(it.images[0])));
+    const sc = $app.querySelector(".scroll");
+    if (sc) chat.savedTop = sc.scrollTop;
     go({ type: "image", list, idx });
   }
 
