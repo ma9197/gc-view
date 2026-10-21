@@ -5,23 +5,59 @@ import { openSync, readSync, fstatSync, closeSync, readFileSync } from "node:fs"
 const IMG_EXT = /\.(png|jpe?g|gif|webp)$/i;
 const MAX_TEXT = 20000; // per item, the glasses never need more
 const mimeOf = (p) => ({ png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" })[String(p).split(".").pop().toLowerCase()] || "application/octet-stream";
+const base = (p) => String(p || "").split(/[\\/]/).pop();
+const lines = (s) => String(s || "").split("\n");
+const first = (s, n = 90) => { const l = lines(s).find((x) => x.trim()) || ""; return l.length > n ? l.slice(0, n - 1) + "…" : l; };
+const clip = (s) => (s.length > MAX_TEXT ? s.slice(0, MAX_TEXT) + "\n…" : s);
+// Tools that only feed the task list (shown as a checklist instead) or are internal plumbing.
+const QUIET = new Set(["TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "TodoWrite", "ToolSearch"]);
 
-// Short one-line summary of a tool call, like the mobile app shows.
+// The argument Claude Code shows in "Name(args)".
 export function toolSummary(name, input = {}) {
-  const base = (p) => String(p || "").split(/[\\/]/).pop();
-  const first = (s, n = 90) => { s = String(s || "").split("\n")[0]; return s.length > n ? s.slice(0, n - 1) + "…" : s; };
   switch (name) {
-    case "Bash": case "PowerShell": return first(input.description || input.command);
-    case "Read": case "Write": case "Edit": case "NotebookEdit": return base(input.file_path || input.notebook_path);
+    case "Bash": case "PowerShell": return first(input.command);
+    case "Read": case "Write": case "Edit": case "MultiEdit": case "NotebookEdit": return base(input.file_path || input.notebook_path);
     case "Grep": case "Glob": return first(input.pattern);
     case "WebFetch": return first(input.url);
     case "WebSearch": return first(input.query);
     case "Agent": case "Task": return first(input.description || input.prompt);
     case "Skill": return first(input.skill);
-    case "TodoWrite": return "Updated the task list";
     case "SendUserFile": return (input.files || []).map(base).join(", ");
-    default: return first(input.description || input.action_summary || input.query || input.url || "");
+    default: return first(input.description || input.action_summary || input.query || input.url || input.action || "");
   }
+}
+
+function textOf(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.filter((c) => c && c.type === "text").map((c) => c.text).join("\n");
+}
+
+// The one-line result Claude Code prints under a tool ("⎿ Read 120 lines"), plus short output / diff for details.
+function toolOutcome(name, input = {}, b, r) {
+  const text = textOf(b.content), out = {};
+  r = r && typeof r === "object" ? r : {};
+  const patch = Array.isArray(r.structuredPatch) ? r.structuredPatch.flatMap((h) => h.lines || []) : null;
+  if (b.is_error) {
+    out.result = first(text, 100) || "Error";
+    out.out = lines(text).slice(0, 12).join("\n").slice(0, 800);
+  } else if (patch && patch.length) {
+    const add = patch.filter((l) => l[0] === "+").length, del = patch.filter((l) => l[0] === "-").length;
+    out.result = `Updated ${base(input.file_path)} with ${add} addition${add === 1 ? "" : "s"} and ${del} removal${del === 1 ? "" : "s"}`;
+    out.diff = patch.slice(0, 60).map((l) => l.slice(0, 160));
+  } else if (name === "Write" && input.content != null) {
+    out.result = `Wrote ${lines(input.content).length} lines to ${base(input.file_path)}`;
+    out.diff = lines(input.content).slice(0, 40).map((l) => "+" + l.slice(0, 160));
+  } else if (name === "Read") {
+    out.result = /image/.test(r.type || "") ? "Read image" : `Read ${(r.file && r.file.numLines) || lines(text).length} lines`;
+  } else if ((name === "Grep" || name === "Glob") && (r.numFiles != null || r.numLines != null)) {
+    out.result = r.mode === "content" && r.numLines != null ? `Found ${r.numLines} lines` : `Found ${r.numFiles} file${r.numFiles === 1 ? "" : "s"}`;
+  } else {
+    const body = r.stdout != null ? r.stdout + (r.stderr ? "\n" + r.stderr : "") : text;
+    out.result = first(body, 100) || "(No output)";
+    out.out = lines(body).filter((l) => l.trim()).slice(0, 25).join("\n").slice(0, 1500);
+  }
+  return out;
 }
 
 // Strips wrapper tags Claude Code puts around some user turns.
@@ -43,29 +79,23 @@ function glassesText(prompt) {
   return body.slice(start + 2).replace(/<\/system-reminder>[\s\S]*$/, "").trim();
 }
 
-function textOf(content) {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content.filter((c) => c && c.type === "text").map((c) => c.text).join("\n");
-}
-
-const clip = (s) => (s.length > MAX_TEXT ? s.slice(0, MAX_TEXT) + "\n…" : s);
-
 /**
- * Incremental parser: call feed() with new jsonl lines, read items/images/pending.
- * items: [{ key, role: user|assistant|tool|question|note, time, text?, tool?, summary?, status?, images?, question? }]
+ * Incremental parser: readFrom() reads new jsonl lines; then use items / tasks / pending() / image().
+ * items: [{ key, role: user|assistant|tool|question|note, time, text?, tool?, summary?, result?, out?, diff?, status?, images? }]
  */
 export class Transcript {
   constructor() {
     this.items = [];
-    this.byKey = new Map();      // key -> item
-    this.toolItems = new Map();  // tool_use id -> item
-    this.images = new Map();     // image id -> { off, len, path } (where it sits in the jsonl) or { file } (image on disk)
+    this.byKey = new Map();       // key -> item
+    this.toolItems = new Map();   // tool_use id -> item
+    this.images = new Map();      // image id -> { off, len, path } (where it sits in the jsonl) or { file } (image on disk)
+    this.tasks = [];              // Claude's task list (TaskCreate/TaskUpdate or TodoWrite), like the CLI checklist
+    this.taskCreates = new Map(); // TaskCreate tool_use id -> task waiting for its id
     this.offset = 0;
     this.partial = Buffer.alloc(0);
     this.title = null;
     this.lastActivity = 0;
-    this.version = 0;            // bumps on every change, lets clients diff cheaply
+    this.version = 0;             // bumps on every change, lets clients diff cheaply
   }
 
   push(item) { this.items.push(item); this.byKey.set(item.key, item); this.version++; return item; }
@@ -132,11 +162,15 @@ export class Transcript {
           if (prev && this.items[this.items.length - 1] === prev) { prev.text = clip(prev.text + "\n\n" + b.text); this.version++; }
           else this.byKey.set(key, this.push({ key: `${key}.${i}`, role: "assistant", time, text: clip(b.text) }));
         } else if (b.type === "tool_use") {
+          this.trackTasks(b);
+          const input = b.input || {};
           const item = b.name === "AskUserQuestion"
-            ? { key: b.id, role: "question", time, tool: b.name, question: (b.input && b.input.questions) || [], status: "pending" }
-            : { key: b.id, role: "tool", time, tool: String(b.name).split("__").pop(), summary: toolSummary(b.name, b.input), status: "running", images: [] };
-          if (b.name === "SendUserFile" && b.input && Array.isArray(b.input.files)) {
-            b.input.files.filter((p) => IMG_EXT.test(p)).forEach((p, n) => item.images.push(this.addImage(`${b.id}.f${n}`, { file: p })));
+            ? { key: b.id, role: "question", time, tool: b.name, question: input.questions || [], status: "pending" }
+            : { key: b.id, role: "tool", time, tool: String(b.name).split("__").pop(), name: b.name, summary: toolSummary(b.name, input),
+                status: "running", images: [], quiet: QUIET.has(b.name), input,
+                detail: b.name === "Bash" || b.name === "PowerShell" ? [input.description, input.command].filter(Boolean).join("\n").slice(0, 600) : null };
+          if (b.name === "SendUserFile" && Array.isArray(input.files)) {
+            input.files.filter((p) => IMG_EXT.test(p)).forEach((p, n) => item.images.push(this.addImage(`${b.id}.f${n}`, { file: p })));
           }
           this.toolItems.set(b.id, this.push(item));
         }
@@ -151,13 +185,37 @@ export class Transcript {
     if (item.role === "question") {
       item.status = b.is_error ? "dismissed" : "answered";
       item.answer = clip(textOf(b.content));
+    } else {
+      Object.assign(item, toolOutcome(item.name, item.input, b, d.toolUseResult));
+      delete item.input; // only needed until the result arrives
+      const t = this.taskCreates.get(b.tool_use_id);
+      if (t) { // the new task's id is only known from the result ("Task #3 created")
+        this.taskCreates.delete(b.tool_use_id);
+        const m = textOf(b.content).match(/#(\d+)/) || [];
+        t.id = String((d.toolUseResult && d.toolUseResult.task && d.toolUseResult.task.id) || m[1] || this.tasks.length + 1);
+        this.tasks.push(t);
+      }
     }
     if (Array.isArray(b.content)) {
       b.content.forEach((c, i) => {
         if (c && c.type === "image" && c.source && c.source.data) item.images.push(this.addImage(`${d.uuid}.${b.tool_use_id}.${i}`, { off: at.off, len: at.len, path: ["message", "content", at.i, "content", i, "source"] }));
       });
     }
-    if (b.is_error && item.role === "tool") item.error = clip(textOf(b.content)).slice(0, 300);
+    this.version++;
+  }
+
+  trackTasks(b) {
+    const i = b.input || {};
+    if (b.name === "TodoWrite" && Array.isArray(i.todos)) {
+      this.tasks = i.todos.map((t, n) => ({ id: String(n + 1), subject: t.content, activeForm: t.activeForm, status: t.status }));
+    } else if (b.name === "TaskCreate") {
+      this.taskCreates.set(b.id, { subject: i.subject, activeForm: i.activeForm, status: "pending" });
+    } else if (b.name === "TaskUpdate") {
+      const t = this.tasks.find((x) => x.id === String(i.taskId));
+      if (!t) return;
+      if (i.status === "deleted") this.tasks = this.tasks.filter((x) => x !== t);
+      else for (const k of ["status", "subject", "activeForm"]) if (i[k]) t[k] = i[k];
+    } else return;
     this.version++;
   }
 
@@ -173,10 +231,10 @@ export class Transcript {
       readSync(fd, buf, 0, buf.length, this.offset);
       // split on raw bytes so each record's byte range is known; a half-written last line waits for next time
       const all = this.partial.length ? Buffer.concat([this.partial, buf]) : buf;
-      const base = this.offset - this.partial.length;
+      const start0 = this.offset - this.partial.length;
       let start = 0;
       for (let nl = all.indexOf(10); nl !== -1; nl = all.indexOf(10, start)) {
-        if (nl > start) this.feedLine(all.toString("utf8", start, nl), base + start, nl - start);
+        if (nl > start) this.feedLine(all.toString("utf8", start, nl), start0 + start, nl - start);
         start = nl + 1;
       }
       this.partial = all.subarray(start);
@@ -211,5 +269,13 @@ export class Transcript {
       if ((it.role === "question" && it.status === "pending") || (it.role === "tool" && it.status === "running")) return it;
     }
     return null;
+  }
+
+  // Task progress for the list row and the spinner line.
+  progress() {
+    const t = this.tasks;
+    if (!t.length) return null;
+    const now = t.find((x) => x.status === "in_progress");
+    return { done: t.filter((x) => x.status === "completed").length, total: t.length, active: now ? now.activeForm || now.subject : null };
   }
 }

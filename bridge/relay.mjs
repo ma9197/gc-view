@@ -32,16 +32,20 @@ export class Relay {
 
   heldFor(id) {
     const h = this.held.get(id);
-    return h ? { kind: h.kind, key: h.key, at: h.at, ...(h.kind === "question" ? { questions: (h.payload.tool_input || {}).questions || [] } : { tool: h.payload.tool_name, input: summarize(h.payload.tool_input) }) } : null;
+    if (!h) return null;
+    const p = h.payload, out = { kind: h.kind, key: h.key, at: h.at };
+    if (h.kind === "question") return { ...out, questions: (p.tool_input || {}).questions || [] };
+    const sug = Array.isArray(p.permission_suggestions) ? p.permission_suggestions : [];
+    return { ...out, tool: String(p.tool_name || "").split("__").pop(), input: summarize(p.tool_input), description: (p.tool_input || {}).description || null, canAlways: sug.length > 0 };
   }
 
   // ---------- glasses -> laptop ----------
-  async send(s, { text }) {
+  async send(s, { text, stop }) {
     text = String(text || "").trim();
     if (!text) return { error: "empty" };
     if (!this.reachable(s)) return { error: "This chat can't receive messages yet. Restart it once after setup." };
     const q = this.queues.get(s.id) || [];
-    const msg = { id: Math.random().toString(36).slice(2), text: text.slice(0, 20000), at: Date.now() };
+    const msg = { id: Math.random().toString(36).slice(2), text: text.slice(0, 20000), at: Date.now(), stop: !!stop };
     q.push(msg); this.queues.set(s.id, q);
     const sent = (this.sent.get(s.id) || []).concat(msg).slice(-50);
     this.sent.set(s.id, sent);
@@ -61,11 +65,22 @@ export class Relay {
     return { ok: true };
   }
 
-  permission(s, { allow, key }) {
+  // Like the CLI dialog: 1 Yes, 2 Yes and don't ask again (Claude Code's own suggested rule), 3 No (+ what to do instead).
+  permission(s, { allow, always, message, key }) {
     const h = this.held.get(s.id);
     if (!h || h.kind !== "permission" || (key && h.key !== key)) return { error: "That request is no longer waiting." };
-    this.finish(s.id, { hookSpecificOutput: { hookEventName: "PermissionRequest", decision: allow ? { behavior: "allow" } : { behavior: "deny", message: "The user denied this from their glasses." } } });
+    const sug = Array.isArray(h.payload.permission_suggestions) ? h.payload.permission_suggestions : [];
+    const decision = allow
+      ? { behavior: "allow", ...(always && sug.length ? { updatedPermissions: sug } : {}) }
+      : { behavior: "deny", message: message ? "The user said (from their glasses): " + String(message).slice(0, 4000) : "The user denied this from their glasses." };
+    this.finish(s.id, { hookSpecificOutput: { hookEventName: "PermissionRequest", decision } });
     return { ok: true };
+  }
+
+  // Like pressing Esc: there is no documented interrupt from outside, so ask Claude (between tool calls) to stop.
+  stop(s) {
+    if (this.held.get(s.id)) this.finish(s.id, null); // hand any held prompt back to the laptop
+    return this.send(s, { text: "STOP. I pressed Stop on my glasses. Finish no more steps and start no new tool calls. Reply in one short line with where you stopped, then wait for me.", stop: true });
   }
 
   finish(id, json) {

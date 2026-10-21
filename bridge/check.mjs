@@ -17,13 +17,23 @@ writeFileSync(file,
   L({ type: "assistant", uuid: "a3", message: { id: "m2", content: [{ type: "tool_use", id: "t1", name: "mcp__Claude_Browser__computer", input: { action: "screenshot" } }] } }) +
   L({ type: "user", uuid: "u2", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: Buffer.from("PNGDATA").toString("base64") } }] }] } }) +
   L({ type: "attachment", uuid: "q1", attachment: { type: "queued_command", prompt: "<task-notification>\n<summary>Stop hook feedback</summary>\n</task-notification>\n<system-reminder>\nStop hook blocking error from command \"FileChanged\": Message from the user, typed or dictated in GlassCode (their own glasses remote, relayed by a hook they installed). If something needs their approval, ask.\n\nrun the tests\n\n</system-reminder>" } }) +
+  L({ type: "assistant", uuid: "a5", message: { id: "m4", content: [{ type: "tool_use", id: "t3", name: "TaskCreate", input: { subject: "Write tests", activeForm: "Writing tests" } }] } }) +
+  L({ type: "user", uuid: "u3", message: { content: [{ type: "tool_result", tool_use_id: "t3", content: "Task #7 created successfully" }] } }) +
+  L({ type: "assistant", uuid: "a6", message: { id: "m5", content: [{ type: "tool_use", id: "t4", name: "TaskUpdate", input: { taskId: "7", status: "in_progress" } }] } }) +
+  L({ type: "assistant", uuid: "a7", message: { id: "m6", content: [{ type: "tool_use", id: "t5", name: "Edit", input: { file_path: "D:/x/app.js" } }] } }) +
+  L({ type: "user", uuid: "u4", toolUseResult: { structuredPatch: [{ lines: [" a", "-b", "+c", "+d"] }] }, message: { content: [{ type: "tool_result", tool_use_id: "t5", content: "ok" }] } }) +
   L({ type: "assistant", uuid: "a4", message: { id: "m3", content: [{ type: "tool_use", id: "t2", name: "AskUserQuestion", input: { questions: [{ question: "Color?", options: [{ label: "Red" }, { label: "Blue" }] }] } }] } }),
 );
 
 const t = new Transcript();
 t.readFrom(file);
 assert.equal(t.title, "Check chat");
-assert.deepEqual(t.items.map((i) => i.role), ["user", "assistant", "tool", "user", "question"]);
+assert.deepEqual(t.items.map((i) => i.role), ["user", "assistant", "tool", "user", "tool", "tool", "tool", "question"]);
+assert.ok(t.items[4].quiet && t.items[5].quiet, "task tools are hidden behind the checklist");
+assert.deepEqual(t.progress(), { done: 0, total: 1, active: "Writing tests" }, "task id comes from the TaskCreate result");
+assert.equal(t.items[6].result, "Updated app.js with 2 additions and 1 removal", "CLI-style edit summary");
+assert.deepEqual(t.items[6].diff, [" a", "-b", "+c", "+d"]);
+assert.equal(t.items[6].input, undefined, "tool input is dropped once the result is in");
 assert.equal(t.items[0].text, "hello");
 assert.equal(t.items[1].text, "part one\n\npart two", "text blocks of one API message merge");
 assert.equal(t.items[2].tool, "computer", "MCP tool names are shortened");

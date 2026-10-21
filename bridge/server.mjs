@@ -92,14 +92,15 @@ function overlay(s) {
 const publicSession = (s) => ({
   id: s.id, name: s.name, folder: s.cwd ? s.cwd.split(/[\\/]/).pop() : null, state: s.state,
   waitingFor: s.waitingFor, since: s.since, last: s.last || null, remote: s.remote, canSend: relay.canSend(s), held: s.held || null,
+  tasks: s.tasks || null, activity: s.activity || null,
 });
 
 function itemsView(s, before, limit) {
   const t = sessions.transcriptFor(s);
   if (!t) return { session: publicSession(s), items: [], start: 0, total: 0 };
   const end = Math.min(before ?? t.items.length, t.items.length), start = Math.max(0, end - limit);
-  const items = t.items.slice(start, end).map((it) => ({ ...it, images: (it.images || []).map((id) => imgUrl(s.id, id)) }));
-  return { session: publicSession(s), items, start, total: t.items.length, version: t.version, pending: t.pending()?.key || null, sent: relay.sentFor(s.id) };
+  const items = t.items.slice(start, end).map(({ input, name, ...it }) => ({ ...it, images: (it.images || []).map((id) => imgUrl(s.id, id)) }));
+  return { session: publicSession(s), items, start, total: t.items.length, version: t.version, pending: t.pending()?.key || null, sent: relay.sentFor(s.id), tasks: t.tasks };
 }
 
 // ---------- http ----------
@@ -153,7 +154,7 @@ const server = http.createServer(async (req, res) => {
         const before = url.searchParams.has("before") ? +url.searchParams.get("before") : undefined;
         return send(res, 200, itemsView(s, before, Math.min(+url.searchParams.get("limit") || 40, 100)));
       }
-      if (req.method === "POST" && ["send", "answer", "permission"].includes(parts[3])) {
+      if (req.method === "POST" && ["send", "answer", "permission", "stop"].includes(parts[3])) {
         const body = await readJson(req);
         log("POST", parts[3], s.id, JSON.stringify(body).slice(0, 2000));
         return send(res, 200, await relay[parts[3]](s, body));

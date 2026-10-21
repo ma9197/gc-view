@@ -104,6 +104,8 @@ export class Sessions {
         const p = s.state === "waiting" ? t.pending() : null;
         if (p) s.waitingFor = p.role === "question" ? "question" : "permission";
         s.last = lastLine(t);
+        s.tasks = t.progress();
+        s.activity = s.state === "running" ? currentStep(t) : null;
       }
       if (!s.name) s.name = s.cwd ? s.cwd.split(/[\\/]/).pop() : s.id.slice(0, 8);
     }
@@ -117,6 +119,12 @@ export class Sessions {
     const list = this.index && Date.now() - this.indexAt < 1500 ? this.index : this.list();
     return list.find((s) => s.id === id) || null;
   }
+}
+
+// What a running chat is doing right now, like the CLI spinner line ("Bash(npm test)").
+function currentStep(t) {
+  const it = t.items[t.items.length - 1];
+  return it && it.role === "tool" && it.status === "running" ? it.tool + (it.summary ? `(${it.summary})` : "") : null;
 }
 
 function lastLine(t) {
