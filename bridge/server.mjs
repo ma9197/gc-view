@@ -110,7 +110,7 @@ function itemsView(s, before, limit) {
 function send(res, code, body, headers = {}) {
   const isBuf = Buffer.isBuffer(body);
   res.writeHead(code, { "Content-Type": isBuf ? headers.type || "application/octet-stream" : "application/json", "Cache-Control": "no-store", ...headers });
-  res.end(isBuf ? body : JSON.stringify(body));
+  res.end(isBuf ? body : body === "" ? undefined : JSON.stringify(body)); // "" = truly empty (hooks: "no decision")
 }
 
 function readJson(req) {

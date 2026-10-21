@@ -169,6 +169,7 @@ export class Transcript {
             : { key: b.id, role: "tool", time, tool: String(b.name).split("__").pop(), name: b.name, summary: toolSummary(b.name, input),
                 status: "running", images: [], quiet: QUIET.has(b.name), input,
                 detail: b.name === "Bash" || b.name === "PowerShell" ? [input.description, input.command].filter(Boolean).join("\n").slice(0, 600) : null };
+          if (b.name === "SendUserFile" && input.caption) item.caption = String(input.caption).slice(0, 400);
           if (b.name === "SendUserFile" && Array.isArray(input.files)) {
             input.files.filter((p) => IMG_EXT.test(p)).forEach((p, n) => item.images.push(this.addImage(`${b.id}.f${n}`, { file: p })));
           }

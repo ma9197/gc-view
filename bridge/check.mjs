@@ -49,6 +49,7 @@ unlinkSync(file);
 // relay: queue -> take, and question hold -> answer
 const sessions = { get: () => ({ id: "s1", name: "S", state: "idle" }) };
 const relay = new Relay(sessions);
+relay.forced = false; // independent of the saved Away state
 const replies = [];
 const send = (res, code, body) => replies.push({ code, body });
 relay.queues.set("s1", [{ id: "m", text: "hi" }]);

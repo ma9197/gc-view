@@ -1,6 +1,6 @@
 /* GlassCode: see and drive the Claude Code chats on your laptop from Meta Ray-Ban Display glasses.
-   Looks like the Claude Code terminal. Talks to the GlassCode bridge on the laptop through a tunnel; the pairing
-   link carries the device key (#t=) and where to find the tunnel address (#g= gist id); both stay on this device.
+   An app look in the spirit of the Claude app. Talks to the GlassCode bridge on the laptop through a tunnel; the
+   pairing link carries the device key (#t=) and where to find the tunnel address (#g= gist id); both stay here.
    Everything works with the Neural Band: swipe = arrows (move/scroll), index pinch = Enter (select),
    middle pinch = Back (history.back, also Escape/Backspace on a keyboard). */
 (function () {
@@ -15,9 +15,22 @@
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  // ---------- preferences (Settings) ----------
   const DEFAULT_QUICK = ["Continue", "Yes, go ahead", "No, stop there", "Run the tests", "Summarize where you are in 3 short bullets", "What do you need from me?"];
-  const prefs = Object.assign({ speak: true, offline: false, quick: DEFAULT_QUICK }, LS.get("prefs", {}));
-  const savePrefs = () => LS.set("prefs", prefs);
+  const CHOICES = {
+    size: [["s", "Small"], ["m", "Medium"], ["l", "Large"], ["xl", "Extra large"]],
+    dim: [["soft", "Soft"], ["dim", "Dim"], ["dimmer", "Dimmer"], ["black", "Darkest"]],
+    font: [["sans", "Clean"], ["serif", "Serif (Claude style)"]],
+  };
+  const prefs = Object.assign({ speak: true, offline: false, quick: DEFAULT_QUICK, size: "m", dim: "dimmer", bold: false, font: "sans", steps: false }, LS.get("prefs", {}));
+  const savePrefs = () => { LS.set("prefs", prefs); applyPrefs(); };
+  function applyPrefs() {
+    const d = document.documentElement.dataset;
+    d.size = prefs.size; d.dim = prefs.dim; d.font = prefs.font; d.bold = prefs.bold ? "1" : "0";
+  }
+  applyPrefs();
+  const label = (k) => (CHOICES[k].find((c) => c[0] === prefs[k]) || CHOICES[k][0])[1];
+  const cycle = (k) => { const i = CHOICES[k].findIndex((c) => c[0] === prefs[k]); prefs[k] = CHOICES[k][(i + 1) % CHOICES[k].length][0]; };
 
   // ---------- pairing ----------
   function readLink(str) {
@@ -78,7 +91,7 @@
     if (on === online) return;
     online = on;
     const d = document.querySelector(".conn");
-    if (d) d.className = "dot conn " + (on ? "ok" : "err");
+    if (d) d.className = "dot conn " + (on ? "c-done" : "c-err");
     if (top().type === "chat") render(); // show or clear the "reconnecting" warning on stale status
   }
 
@@ -152,17 +165,16 @@
     const byKey = k && $app.querySelector(`[data-k="${CSS.escape(k)}"]`);
     const sc = $app.querySelector(".scroll");
     if (!sc) return byKey || null;
-    const v = sc.getBoundingClientRect(), seen = (e) => { const r = e.getBoundingClientRect(); return r.bottom > v.top && r.top < v.bottom; };
-    if (byKey && seen(byKey)) return byKey;
+    const v = sc.getBoundingClientRect(), shown = (e) => { const r = e.getBoundingClientRect(); return r.bottom > v.top && r.top < v.bottom; };
+    if (byKey && shown(byKey)) return byKey;
     let best = null, bd = Infinity;
     for (const e of sc.querySelectorAll("[data-f]")) {
-      if (!seen(e)) continue;
+      if (!shown(e)) continue;
       const r = e.getBoundingClientRect(), d = Math.abs((r.top + r.bottom) / 2 - (v.top + v.bottom) / 2);
       if (d < bd) { bd = d; best = e; }
     }
     return best || byKey || null;
   }
-
   function restoreFocus(fallback) {
     const k = focusKey[top().type];
     const byKey = k && $app.querySelector(`[data-k="${CSS.escape(k)}"]`);
@@ -207,24 +219,18 @@
   $app.addEventListener("click", (e) => { const t = e.target.closest("[data-k]"); if (t && t.tagName !== "INPUT") activate(t); });
   $app.addEventListener("change", (e) => { const t = e.target; if (t.dataset && t.dataset.k) onInput(t); });
 
-  // ---------- glyphs (CSS/SVG, so they render on any font) ----------
-  const star = (spin) => `<svg class="star${spin ? " spin" : ""}" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/></svg>`;
+  // ---------- icons ----------
+  const spark = (spin) => `<svg class="spark${spin ? " spin" : ""}" viewBox="0 0 24 24" aria-hidden="true"><g stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 2.5v6M12 15.5v6M2.5 12h6M15.5 12h6M5.3 5.3l4.2 4.2M14.5 14.5l4.2 4.2M18.7 5.3l-4.2 4.2M9.5 14.5l-4.2 4.2"/></g></svg>`;
   const dot = (cls) => `<span class="dot ${cls || ""}"></span>`;
-  const elbow = '<span class="elbow"></span>';
-  const ptr = '<span class="ptr"><svg viewBox="0 0 10 16" width=".6em" height=".9em" aria-hidden="true"><path d="M2 2l6 6-6 6" stroke="currentColor" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
+  const arrowUp = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5L12 5l6.5 6.5" stroke="currentColor" stroke-width="2.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const box = (st) => `<span class="box${st === "completed" ? " on" : st === "in_progress" ? " mid" : ""}"></span>`;
 
-  function mark(s) {
-    if (s.state === "running") return star(true);
-    if (s.state === "waiting") return `<span class="warn">${dot()}</span>`;
-    if (s.state === "idle") return `<span class="ok">${dot()}</span>`;
-    return `<span class="dim">${dot("hollow")}</span>`;
-  }
-  const COLOR = { running: "cl", waiting: "warn", idle: "ok", offline: "dim" };
+  const CLS = { running: "c-run", waiting: "c-wait", idle: "c-done", offline: "c-off" };
+  const mark = (s) => (s.state === "running" ? `<span class="c-run">${dot("pulse")}</span>` : s.state === "offline" ? `<span class="c-off">${dot("ring")}</span>` : `<span class="${CLS[s.state]}">${dot()}</span>`);
   function stateText(s) {
-    if (s.state === "running") return "working " + dur(Date.now() - s.since);
-    if (s.state === "waiting") return s.waitingFor === "question" ? "question for you" : /permission/.test(s.waitingFor || "") ? "needs approval" : "waiting for you";
-    return s.state === "idle" ? "done" : "offline";
+    if (s.state === "running") return "Working " + dur(Date.now() - s.since);
+    if (s.state === "waiting") return s.waitingFor === "question" ? "Question for you" : /permission/.test(s.waitingFor || "") ? "Needs approval" : "Waiting for you";
+    return s.state === "idle" ? "Done" : "Offline";
   }
   function dur(ms) {
     const s = Math.max(0, Math.floor(ms / 1000));
@@ -254,6 +260,7 @@
     }).join("");
   }
   const plain = (s) => String(s).replace(/```[\s\S]*?```/g, " code block. ").replace(/[`*#>|_]/g, "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+  const short = (s, n) => { const t = plain(s).replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
 
   // ---------- screens ----------
   function render() {
@@ -266,56 +273,61 @@
   }
 
   function renderPair() {
-    $app.innerHTML = `<div class="pair"><div class="t">${star()} <b>GlassCode</b></div>
-      <div class="dim">Open the GlassCode pairing link from your phone (tap it or scan its QR code).</div>
-      <input class="otext" type="text" data-f data-k="pair" autocomplete="off" spellcheck="false" placeholder="Or paste the link here"></div>`;
+    $app.innerHTML = `<div class="pair"><h1>${spark()} GlassCode</h1>
+      <div class="t2">Open the GlassCode pairing link from your phone (tap it or scan its QR code).</div>
+      <input class="field" type="text" data-f data-k="pair" autocomplete="off" spellcheck="false" placeholder="Or paste the link here"></div>`;
     restoreFocus();
   }
 
-  function rowHtml(s) {
-    const t = s.tasks, line3 = s.activity || (s.last ? (s.last.role === "user" ? "> " : "") + s.last.text : "");
-    return `<button class="row" data-f data-k="s:${esc(s.id)}">${ptr}<span class="rb">
-      <span class="rl1">${mark(s)}<span class="rn">${esc(s.name)}</span>${isNew(s) ? '<span class="tag">new</span>' : ""}</span>
-      <span class="rl2"><span class="${COLOR[s.state]}">${esc(stateText(s))}</span>${s.folder ? " &middot; " + esc(s.folder) : ""}${s.state !== "running" ? " &middot; " + ago(s.since) : ""}${t ? ` &middot; ${t.done}/${t.total} tasks` : ""}</span>
-      ${line3 ? `<span class="rl3">${elbow}<span>${esc(line3)}</span></span>` : ""}</span></button>`;
+  function cardHtml(s) {
+    const t = s.tasks;
+    return `<button class="card${s.state === "waiting" ? " need" : ""}" data-f data-k="s:${esc(s.id)}">
+      <span class="l1">${mark(s)}<span class="nm">${esc(s.name)}</span>${isNew(s) ? '<span class="new">New</span>' : ""}</span>
+      <span class="l2"><span class="st ${CLS[s.state]}">${esc(stateText(s))}</span>${s.folder ? `<span>${esc(s.folder)}</span>` : ""}${s.state !== "running" ? `<span>${ago(s.since)}</span>` : ""}${t ? `<span>${t.done}/${t.total} tasks</span>` : ""}</span>
+      ${s.last ? `<span class="l3">${s.last.role === "user" ? "You: " : ""}${esc(short(s.last.text, 120))}</span>` : ""}</button>`;
   }
 
   function renderList() {
     const live = S.sessions.filter((s) => s.state !== "offline"), off = S.sessions.filter((s) => s.state === "offline");
-    const need = live.filter((s) => s.state === "waiting"), running = live.filter((s) => s.state === "running");
+    const need = live.filter((s) => s.state === "waiting"), work = live.filter((s) => s.state === "running"), done = live.filter((s) => s.state === "idle");
     let body;
     if (!S.loaded) body = `<div class="empty">${esc(S.error || "Connecting to your laptop...")}</div>`;
     else {
-      body = need.length ? `<button class="row inbox" data-f data-k="inbox">${ptr}<span class="rb"><span class="rl1">${dot()}<span class="rn">${need.length === 1 ? "1 chat needs you" : need.length + " chats need you"}</span></span>
-        <span class="rl2">Pinch to start with ${esc(need[0].name)}</span></span></button>` : "";
-      body += live.map(rowHtml).join("") || `<div class="empty">No chats are open on the laptop.</div>`;
+      const sect = (title, list) => (list.length ? `<div class="sect">${title}</div>` + list.map(cardHtml).join("") : "");
+      body = sect("Needs you", need) + sect("Working", work) + sect("Done", done);
+      if (!live.length) body = `<div class="empty">No chats are open on the laptop.</div>`;
       if (off.length) {
-        body += `<button class="row" data-f data-k="offline">${ptr}<span class="rb"><span class="rl1"><span class="dim">${dot("hollow")}</span><span class="rn dim">${prefs.offline ? "Hide" : "Show"} offline chats (${off.length})</span></span><span class="rl2">Closed on the laptop. Read only.</span></span></button>`;
-        if (prefs.offline) body += off.map(rowHtml).join("");
+        body += `<button class="card" data-f data-k="offline"><span class="l1"><span class="c-off">${dot("ring")}</span><span class="nm t2">${prefs.offline ? "Hide" : "Show"} offline chats (${off.length})</span></span><span class="l3">Closed on the laptop. Read only.</span></button>`;
+        if (prefs.offline) body += off.map(cardHtml).join("");
       }
     }
-    $app.innerHTML = `<div class="welcome"><div class="t">${star()} GlassCode<span class="dim" style="font-weight:400">${S.laptop ? " &middot; " + esc(S.laptop) : ""}</span>
-        <span class="dot conn ${online ? "ok" : "err"}" style="margin-left:auto"></span></div>
-      <div class="s">${live.length} open &middot; <span class="${need.length ? "warn" : ""}">${need.length} need you</span> &middot; ${running.length} working</div>
-      <div class="modes" data-row><button class="chip${S.away ? " on" : ""}" data-f data-k="away">&raquo; Away: ${S.away ? "on" : "off"}</button><button class="chip" data-f data-k="settings">Settings</button></div></div>
+    $app.innerHTML = `<div class="top" data-row><span class="title">${spark()}<span>GlassCode</span><span class="dot conn ${online ? "c-done" : "c-err"}"></span></span>
+        <button class="pill btn${S.away ? " on" : ""}" data-f data-k="away">Away ${S.away ? "on" : "off"}</button><button class="pill btn" data-f data-k="settings">Settings</button></div>
       <div class="scroll">${body}</div>`;
-    restoreFocus(need.length ? '[data-k="inbox"]' : ".scroll [data-f]");
+    restoreFocus(".scroll [data-f]");
   }
 
   function renderSettings() {
-    const c = confirming;
-    const item = (k, label, val, on) => `<button class="set" data-f data-k="${k}">${ptr}<span>${label}</span><span class="sv${on ? " on" : ""}">${val}</span></button>`;
-    $app.innerHTML = `<div class="head"><span class="n">${star()} Settings</span></div><div class="scroll">
-      ${item("set:away", "Away mode (questions to glasses)", S.away ? "on" : "off", S.away)}
-      ${item("set:speak", "Speak alerts out loud", prefs.speak ? "on" : "off", prefs.speak)}
-      ${item("set:offline", "Show offline chats", prefs.offline ? "on" : "off", prefs.offline)}
-      <div class="sect">Quick replies &middot; pinch one twice to remove</div>
-      ${prefs.quick.map((q, i) => item("qr:" + i, esc(q), c("qr:" + i) ? "pinch again to remove" : "", false)).join("")}
-      <input class="otext" type="text" data-f data-k="qradd" autocomplete="off" placeholder="+ Add a quick reply (speak or type)">
-      ${item("qr:reset", "Reset quick replies", c("qr:reset") ? "pinch again" : "", false)}
+    const item = (k, name, val, on, cls) => `<button class="set${cls ? " " + cls : ""}" data-f data-k="${k}"><span>${name}</span><span class="sv${on ? " on" : ""}">${val}</span></button>`;
+    $app.innerHTML = `<div class="top"><span class="title">${spark()}<span>Settings</span></span></div><div class="scroll">
+      <div class="sect">Reading</div>
+      ${item("set:size", "Text size", label("size"))}
+      ${item("set:bold", "Bold text", prefs.bold ? "On" : "Off", prefs.bold)}
+      ${item("set:font", "Reply font", label("font"))}
+      ${item("set:dim", "Background", label("dim"))}
+      <div class="preview">Preview: Claude's replies look like this. Black is see-through on the glasses; "Darkest" removes the grey panels.</div>
+      <div class="sect">Chats</div>
+      ${item("set:away", "Away mode", S.away ? "On" : "Off", S.away)}
+      ${item("set:speak", "Speak alerts out loud", prefs.speak ? "On" : "Off", prefs.speak)}
+      ${item("set:steps", "Show Claude's steps", prefs.steps ? "On" : "Off", prefs.steps)}
+      ${item("set:offline", "Show offline chats", prefs.offline ? "On" : "Off", prefs.offline)}
+      <div class="sect">Quick replies (pinch one twice to remove)</div>
+      ${prefs.quick.map((q, i) => item("qr:" + i, esc(q), confirming("qr:" + i) ? "Pinch again to remove" : "", false, "danger")).join("")}
+      <input class="field" type="text" data-f data-k="qradd" autocomplete="off" placeholder="+ Add a quick reply (speak or type)">
+      ${item("qr:reset", "Reset quick replies", confirming("qr:reset") ? "Pinch again" : "")}
       <div class="sect">This device</div>
-      <button class="set danger" data-f data-k="unpair">${ptr}<span>Unpair this device</span><span class="sv">${c("unpair") ? "pinch again to unpair" : ""}</span></button>
-      <div class="sect">${esc(S.laptop || "laptop")} &middot; swipe to move, pinch to select, back to leave</div></div>`;
+      ${item("unpair", "Unpair this device", confirming("unpair") ? "Pinch again to unpair" : "", false, "danger")}
+      <div class="note">${esc(S.laptop || "laptop")} &middot; swipe to move, pinch to select, back to leave</div></div>`;
     restoreFocus(".scroll [data-f]");
   }
 
@@ -330,8 +342,34 @@
     renderImage();
   }
 
-  // transcript items -> blocks; long runs of plain tool steps fold into one row
-  function blocks(items) {
+  // The conversation as you'd read it in the Claude app: your messages, Claude's final reply of each turn,
+  // pictures (with the text that went with them) and questions. Steps and running comments stay hidden.
+  function conversation(items, running) {
+    const out = [];
+    let last = null, cap = null, pics = [];
+    const reply = (atEnd) => {
+      if (last && !(atEnd && running)) { // a turn still running has no final reply yet
+        out.push({ kind: "reply", it: last });
+        pics.forEach((b) => { if (b.from === last) b.cap = null; }); // don't repeat the reply as a caption
+      }
+      last = null; pics = [];
+    };
+    for (const it of items) {
+      if (it.role === "user") { reply(false); out.push({ kind: "user", it }); }
+      else if (it.role === "assistant") { last = it; cap = it; }
+      else if (it.role === "question") { reply(false); out.push({ kind: "question", it }); }
+      else if (it.role === "note") out.push({ kind: "note", it });
+      else if (it.role === "tool" && it.images && it.images.length) {
+        const b = { kind: "image", it, from: it.caption ? null : cap, cap: it.caption || (cap ? short(cap.text, 220) : "") };
+        out.push(b); pics.push(b);
+      }
+    }
+    reply(true);
+    return out;
+  }
+
+  // "Show Claude's steps" (Settings): everything, with long runs of steps folded into one row
+  function steps(items) {
     const out = [];
     let run = [];
     const flush = () => {
@@ -340,48 +378,41 @@
       run = [];
     };
     for (const it of items) {
-      if (it.quiet) continue; // task-list plumbing: shown as the checklist instead
-      const plainTool = it.role === "tool" && !(it.images && it.images.length) && it.status === "done" && !chat.open.has("i:" + it.key);
-      if (plainTool) { run.push(it); continue; }
+      if (it.quiet) continue;
+      if (it.role === "tool" && !(it.images && it.images.length) && it.status === "done" && !chat.open.has("i:" + it.key)) { run.push(it); continue; }
       flush();
-      out.push({ kind: it.role, it });
+      out.push(it.role === "assistant" ? { kind: "reply", it } : it.role === "tool" && it.images && it.images.length ? { kind: "image", it, cap: it.caption || it.result || "" } : { kind: it.role, it });
     }
     flush();
     return out;
   }
 
-  const thumbs = (it) => (it && it.images && it.images.length ? `<div class="thumbs">${it.images.map((u) => `<img src="${esc(img(u))}" alt="" loading="lazy">`).join("")}</div>` : "");
-
-  function toolDetails(it) {
-    const diff = it.diff ? `<div class="diff">${it.diff.map((l) => `<div class="${l[0] === "+" ? "a" : l[0] === "-" ? "d" : "c"}">${esc(l)}</div>`).join("")}</div>` : "";
-    return `<div class="det">${it.detail ? `<pre class="cmd">${esc(it.detail)}</pre>` : ""}${diff}${it.out ? `<pre>${esc(it.out)}</pre>` : ""}${!it.detail && !diff && !it.out ? "<pre>No more details.</pre>" : ""}</div>`;
-  }
+  const thumbs = (urls) => (urls && urls.length ? `<div class="thumbs">${urls.map((u) => `<img src="${esc(img(u))}" alt="" loading="lazy">`).join("")}</div>` : "");
 
   function blockHtml(b) {
     const it = b.it, k = (p) => `data-f tabindex="-1" data-k="${p}"`;
     switch (b.kind) {
       case "user":
-        return `<div class="it user" ${k("i:" + esc(it.key))}>${it.via === "glasses" ? '<div class="via">from your glasses</div>' : ""}<span class="gt">&gt;</span>${esc(it.text).replace(/\n/g, "<br>")}${thumbs(it)}</div>`;
-      case "assistant":
-        return `<div class="it" ${k("i:" + esc(it.key))}><div class="line">${dot()}<div class="md">${md(it.text)}</div></div>${thumbs(it)}</div>`;
+        return `<div class="msg bubble" ${k("i:" + esc(it.key))}>${it.via === "glasses" ? '<div class="via">From your glasses</div>' : ""}${esc(it.text).replace(/\n/g, "<br>")}${thumbs(it.images)}</div>`;
+      case "reply":
+        return `<div class="msg reply" ${k("i:" + esc(it.key))}>${spark()}<div class="body md">${md(it.text)}</div></div>`;
+      case "image":
+        return `<div class="msg imgcard" ${k("i:" + esc(it.key))}>${thumbs(it.images)}${b.cap ? `<div class="cap">${esc(b.cap)}</div>` : ""}</div>`;
       case "note":
         return `<div class="note">${esc(it.text)}</div>`;
       case "question": {
         const q = (it.question || [])[0] || {};
         const ans = it.status === "answered" ? esc((it.answer || "").replace(/^User has answered your questions?:\s*/i, "").slice(0, 240)) : it.status === "pending" ? "Waiting for your answer" : "Dismissed";
-        return `<div class="it" ${k("i:" + esc(it.key))}><div class="line"><span class="${it.status === "pending" ? "warn" : "ok"}">${dot()}</span><span><span class="tn">Question</span> ${esc(q.question || "")}</span></div><div class="res">${elbow}<span>${ans}</span></div></div>`;
+        return `<div class="msg qcard" ${k("i:" + esc(it.key))}><b>${esc(q.question || "Question")}</b><br>${ans}</div>`;
       }
-      case "group": {
-        const counts = {};
-        b.items.forEach((x) => { counts[x.tool] = (counts[x.tool] || 0) + 1; });
-        const what = Object.entries(counts).map(([n, c]) => (c > 1 ? `${esc(n)} &times;${c}` : esc(n))).join(", ");
-        return `<div class="it" ${k("g:" + esc(b.key))}><div class="line"><span class="ok">${dot()}</span><span><span class="tn">${b.items.length} tool uses</span></span></div><div class="res">${elbow}<span>${what} &middot; pinch to expand</span></div></div>`;
-      }
-      default: { // tool, like "● Bash(npm test)  ⎿ 12 passed"
-        const st = it.status === "running" ? `<span class="dim">${dot("blink")}</span>` : it.status === "error" ? `<span class="err">${dot()}</span>` : `<span class="ok">${dot()}</span>`;
+      case "group":
+        return `<div class="step" ${k("g:" + esc(b.key))}><span class="sn">${b.items.length} steps</span><span class="ss">${esc([...new Set(b.items.map((x) => x.tool))].join(", "))} &middot; pinch to show</span></div>`;
+      default: { // a step (only with "Show Claude's steps")
+        const st = it.status === "running" ? "c-run" : it.status === "error" ? "c-err" : "c-done";
         const open = chat.open.has("i:" + it.key);
-        return `<div class="it" ${k("i:" + esc(it.key))}><div class="line">${st}<span><span class="tn">${esc(it.tool)}</span>${it.summary ? `(${esc(it.summary)})` : ""}</span></div>
-          <div class="res">${elbow}<span class="${it.status === "error" ? "err" : ""}">${esc(it.status === "running" ? "Running..." : it.result || "Done")}</span></div>${open ? toolDetails(it) : ""}${thumbs(it)}</div>`;
+        const diff = it.diff ? it.diff.map((l) => `<span class="${l[0] === "+" ? "a" : l[0] === "-" ? "d" : ""}">${esc(l)}</span>`).join("\n") : "";
+        return `<div class="step" ${k("i:" + esc(it.key))}><span class="${st}">${dot()}</span><span class="sn">${esc(it.tool)}</span><span class="ss">${esc(it.status === "running" ? "running..." : it.result || it.summary || "")}</span></div>
+          ${open ? `<div class="det">${esc(it.detail || it.summary || "")}${diff ? "\n" + diff : ""}${it.out ? "\n" + esc(it.out) : ""}</div>` : ""}`;
       }
     }
   }
@@ -391,39 +422,37 @@
     if (!ts.length || (ts.every((t) => t.status === "completed") && chat.session && chat.session.state !== "running")) return "";
     const open = chat.open.has("tasks"), done = ts.filter((t) => t.status === "completed").length;
     let show = ts;
-    if (!open && ts.length > 6) { const i = Math.max(0, ts.findIndex((t) => t.status !== "completed") - 1); show = ts.slice(i, i + 6); }
-    return `<div class="it tasks" data-f tabindex="-1" data-k="tasks"><div class="line"><span class="cl">${dot()}</span><span><span class="tn">Tasks</span> <span class="dim">${done}/${ts.length} done</span></span></div>
+    if (!open && ts.length > 5) { const i = Math.max(0, ts.findIndex((t) => t.status !== "completed") - 1); show = ts.slice(i, i + 5); }
+    return `<div class="tasks" data-f tabindex="-1" data-k="tasks"><div class="sect" style="margin:0 0 4px">Tasks &middot; ${done} of ${ts.length} done</div>
       ${show.map((t) => `<div class="task${t.status === "completed" ? " done" : t.status === "in_progress" ? " now" : ""}">${box(t.status)}<span>${esc(t.status === "in_progress" ? t.activeForm || t.subject : t.subject)}</span></div>`).join("")}
-      ${show.length < ts.length ? `<div class="dim" style="font-size:14px">+${ts.length - show.length} more &middot; pinch to see all</div>` : ""}</div>`;
+      ${show.length < ts.length ? `<div class="t3" style="font-size:.78em">+${ts.length - show.length} more &middot; pinch to see all</div>` : ""}</div>`;
   }
 
   function dialogHtml(s) {
     const h = s.held;
     if (h && h.kind === "question") {
-      return `<div class="dlg">${(h.questions || []).map((q, qi) => {
-        const a = chat.answers[qi] || (chat.answers[qi] = { picked: [], other: "" }), n = (q.options || []).length;
-        return `${q.header ? `<div class="hdr">${esc(q.header)}</div>` : ""}<div class="q">${esc(q.question)}</div>
+      return `<div class="dlg"><div class="kind">Claude asks</div>${(h.questions || []).map((q, qi) => {
+        const a = chat.answers[qi] || (chat.answers[qi] = { picked: [], other: "" });
+        return `<div class="q">${q.header ? esc(q.header) + ": " : ""}${esc(q.question)}</div>
           ${(q.options || []).map((o, oi) => { const on = a.picked.includes(o.label);
-            return `<button class="opt${on ? " on" : ""}" data-f data-k="o:${qi}:${oi}">${ptr}<span class="ob"><div class="ol">${q.multiSelect ? box(on ? "completed" : "") + " " : ""}${oi + 1}. ${esc(o.label)}</div>${o.description ? `<div class="od">${esc(o.description)}</div>` : ""}</span></button>`; }).join("")}
-          <input class="otext" type="text" data-f data-k="other:${qi}" autocomplete="off" placeholder="${n + 1}. ${a.other ? esc(a.other) : "Type something (speak or type)"}">`;
-      }).join("<br>")}
-        <button class="opt" data-f data-k="submit" style="margin-top:6px">${ptr}<span class="ob"><div class="ol pm">Submit</div></span></button></div>`;
+            return `<button class="opt${on ? " on" : ""}" data-f data-k="o:${qi}:${oi}">${q.multiSelect ? box(on ? "completed" : "") : ""}<span class="ob"><div>${esc(o.label)}</div>${o.description ? `<div class="od">${esc(o.description)}</div>` : ""}</span></button>`; }).join("")}
+          <input class="field" type="text" data-f data-k="other:${qi}" autocomplete="off" placeholder="${a.other ? esc(a.other) : "Something else (speak or type)"}">`;
+      }).join("")}
+        <button class="opt go" data-f data-k="submit">Send answer</button></div>`;
     }
     if (h && h.kind === "permission") {
-      return `<div class="dlg"><div class="dt">${esc(h.tool)}${/^(Bash|PowerShell)$/.test(h.tool) ? " command" : ""}</div>
-        <div class="cmdbox">${esc(h.input)}</div>${h.description ? `<div class="dim" style="font-size:15px">${esc(h.description)}</div>` : ""}
-        <div class="q">Do you want to proceed?</div>
-        <button class="opt" data-f data-k="p:yes">${ptr}<span class="ob"><div class="ol">1. Yes</div></span></button>
-        ${h.canAlways ? `<button class="opt" data-f data-k="p:always">${ptr}<span class="ob"><div class="ol">2. Yes, and don't ask again</div><div class="od">Claude Code's own suggested rule</div></span></button>` : ""}
-        <button class="opt" data-f data-k="p:no">${ptr}<span class="ob"><div class="ol">${h.canAlways ? 3 : 2}. No</div></span></button>
-        <input class="otext" type="text" data-f data-k="p:tell" autocomplete="off" placeholder="${h.canAlways ? 4 : 3}. No, and tell Claude what to do differently"></div>`;
+      return `<div class="dlg"><div class="kind">Approval needed</div><div class="q">${esc(h.tool)}${h.description ? ": " + esc(h.description) : ""}</div>
+        <div class="cmd">${esc(h.input)}</div>
+        <button class="opt" data-f data-k="p:yes"><span class="ob">Yes</span></button>
+        ${h.canAlways ? `<button class="opt" data-f data-k="p:always"><span class="ob"><div>Yes, and don't ask again</div><div class="od">Claude Code's own suggested rule</div></span></button>` : ""}
+        <button class="opt" data-f data-k="p:no"><span class="ob">No</span></button>
+        <input class="field" type="text" data-f data-k="p:tell" autocomplete="off" placeholder="No, and tell Claude what to do instead"></div>`;
     }
     if (s.state === "waiting") {
       const q = [...chat.items].reverse().find((x) => x.role === "question" && x.status === "pending");
-      return `<div class="dlg" style="border-color:var(--warn)"><div class="dt warn">Waiting on the laptop</div>
-        ${q ? `<div class="q">${esc(((q.question || [])[0] || {}).question || "")}</div>` : ""}
-        <div class="dim" style="font-size:15px">Answer it on the laptop or your phone. ${S.away ? "" : "Turn Away on first to answer here next time."}</div>
-        ${S.away ? "" : `<button class="opt" data-f data-k="away">${ptr}<span class="ob"><div class="ol">Turn Away on</div></span></button>`}</div>`;
+      return `<div class="dlg"><div class="kind">Waiting on the laptop</div>${q ? `<div class="q">${esc(((q.question || [])[0] || {}).question || "")}</div>` : ""}
+        <div class="t2" style="font-size:.86em">Answer it on the laptop or your phone.${S.away ? "" : " Turn Away on first to answer here next time."}</div>
+        ${S.away ? "" : '<button class="opt" data-f data-k="away"><span class="ob">Turn Away on</span></button>'}</div>`;
     }
     return "";
   }
@@ -437,30 +466,30 @@
     chat.savedTop = null;
     const atBottom = saved == null && (!sc || chat.atBottom !== false), prevTop = saved != null ? saved : sc ? sc.scrollTop : 0;
     const pendingSent = (chat.sent || []).filter((m) => !m.delivered);
-    const others = S.sessions.filter((x) => x.id !== chat.id && x.state === "waiting");
-    let html = chat.start > 0 ? `<div class="note">swipe up for older messages</div>` : "";
-    html += blocks(chat.items).map(blockHtml).join("") + tasksHtml();
-    html += pendingSent.map((m) => `<div class="it user"><div class="via">sending from your glasses...</div><span class="gt">&gt;</span>${esc(m.text)}</div>`).join("");
+    const list = prefs.steps ? steps(chat.items) : conversation(chat.items, s.state === "running");
+    let html = chat.start > 0 ? `<div class="note">Swipe up for older messages</div>` : "";
+    html += list.map(blockHtml).join("") + tasksHtml();
+    html += pendingSent.map((m) => `<div class="msg bubble"><div class="via">Sending from your glasses...</div>${esc(m.text)}</div>`).join("");
     html += dialogHtml(s);
-    if (others.length && !s.held) html += `<button class="it" data-f data-k="next:${esc(others[0].id)}"><div class="line"><span class="warn">${dot()}</span><span class="warn">Next: ${esc(others[0].name)} needs you</span></div></button>`;
+    if (!list.length && !pendingSent.length) html += `<div class="empty">${s.state === "running" ? "Claude is working. The reply shows here when it's done." : "No messages yet."}</div>`;
 
     const draft = LS.get("draft:" + chat.id, "");
     const t = chat.session && chat.session.tasks;
-    const spinner = s.state === "running" && online ? `<div class="spin" data-row>${star(true)}<span class="v">${esc((t && t.active) || "Working")}&hellip; <span class="dim">(<span class="el">${dur(Date.now() - s.since)}</span>${t ? ` &middot; ${t.done}/${t.total} tasks` : ""})</span></span>
-      ${s.canSend ? `<button class="chip" data-f data-k="stop">${confirming("stop") ? "Pinch again to stop" : "Stop"}</button>` : ""}</div>` : "";
+    const status = s.state === "running" && online
+      ? `<div class="status" data-row>${spark(true)}<span class="v">${esc((t && t.active) || "Working")} <span class="t3">&middot; <span class="el">${dur(Date.now() - s.since)}</span>${t ? ` &middot; ${t.done}/${t.total} tasks` : ""}</span></span>
+        ${s.canSend ? `<button class="chip warn" data-f data-k="stop">${confirming("stop") ? "Pinch again to stop" : "Stop"}</button>` : ""}</div>` : "";
     const quick = s.canSend && !s.held ? `<div class="chips" data-row>${prefs.quick.map((q, i) => `<button class="chip" data-f data-k="q:${i}">${esc(q)}</button>`).join("")}</div>` : "";
-    const prompt = s.canSend
-      ? `<div class="prompt">${draft ? `<div class="draft" data-f tabindex="-1" data-k="draft">${esc(draft)}</div>` : ""}
-          <div class="pl"><span class="gt">&gt;</span><input class="pin" type="text" data-f data-k="speak" autocomplete="off" spellcheck="false" placeholder="${draft ? "Add more (speak or type)" : "Speak or type..."}"></div></div>
-        ${draft ? '<div class="acts" data-row><button class="chip go" data-f data-k="send">Send</button><button class="chip" data-f data-k="undo">Undo</button><button class="chip" data-f data-k="clear">Clear</button></div>' : ""}`
+    const compose = s.canSend
+      ? `${draft ? `<div class="draft" data-f tabindex="-1" data-k="draft">${esc(draft)}</div>` : ""}
+        <div class="composer" data-row><input class="in" type="text" data-f data-k="speak" autocomplete="off" spellcheck="false" placeholder="${draft ? "Add more (speak or type)" : "Reply to Claude (speak or type)"}">
+          ${draft ? `<button class="round send" data-f data-k="send" aria-label="Send">${arrowUp}</button>` : ""}</div>
+        ${draft ? '<div class="chips" data-row><button class="chip" data-f data-k="undo">Undo last part</button><button class="chip" data-f data-k="clear">Clear</button></div>' : ""}`
       : `<div class="ro">${s.state === "offline" ? "Offline: open it on the laptop to continue." : "Read only: restart this chat on the laptop once to message it."}</div>`;
-    // like the CLI mode line; only shown when it matters, to keep the transcript big
-    const modeline = speaking ? '<div class="modeline cl">reading aloud &middot; pinch the reply again to stop</div>' : S.away ? '<div class="modeline"><span class="warn">&raquo; away mode on</span> &middot; questions come here</div>' : "";
+    const mode = speaking ? '<div class="mode c-run">Reading aloud &middot; pinch the reply again to stop</div>' : S.away ? '<div class="mode"><span class="c-wait">Away mode on</span> &middot; questions come here, replies kept short</div>' : "";
+    const state = online ? `<span class="pill ${CLS[s.state]}">${mark(s)}${esc(stateText(s))}</span>` : `<span class="pill c-err">${dot("pulse")}Reconnecting</span>`;
 
-    // stale data must look stale: while the laptop can't be reached, say so instead of a frozen "working"
-    const state = online ? `<span class="st ${COLOR[s.state]}">${mark(s)}${esc(stateText(s))}</span>` : `<span class="st err">${dot("blink")}reconnecting...</span>`;
-    $app.innerHTML = `<div class="head"><span class="n">${esc(s.name)}</span>${state}</div>
-      <div class="scroll">${html}</div><div class="bottom">${spinner}${quick}${prompt}${modeline}</div>`;
+    $app.innerHTML = `<div class="top"><span class="title"><span>${esc(s.name)}</span></span>${state}</div>
+      <div class="scroll">${html}</div><div class="bottom">${status}${quick}${compose}${mode}</div>`;
 
     const nsc = $app.querySelector(".scroll");
     nsc.addEventListener("scroll", () => { if (chat) chat.atBottom = nsc.scrollHeight - nsc.scrollTop - nsc.clientHeight < 40; });
@@ -469,7 +498,7 @@
     else nsc.scrollTop = atBottom ? nsc.scrollHeight : prevTop;
     if (chat.first && chat.ready) { // first view: the question if one waits, else the newest message
       chat.first = false;
-      const all = nsc.querySelectorAll('[data-k^="i:"], [data-k^="g:"], [data-k="tasks"]');
+      const all = nsc.querySelectorAll('[data-k^="i:"], [data-k="tasks"]');
       const e = (s.held && nsc.querySelector(".dlg [data-f]")) || all[all.length - 1] || $app.querySelector(".bottom [data-f]");
       focusKey.chat = e && e.dataset.k;
     }
@@ -482,12 +511,13 @@
     const k = el.dataset.k;
     try {
       if (k.startsWith("s:")) return openChat(k.slice(2));
-      if (k.startsWith("next:")) { stack.pop(); return openChat(k.slice(5)); }
-      if (k === "inbox") { const s = S.sessions.find((x) => x.state === "waiting"); return s && openChat(s.id); }
       if (k === "offline" || k === "set:offline") { prefs.offline = !prefs.offline; savePrefs(); return render(); }
       if (k === "settings") return go({ type: "settings" });
       if (k === "away" || k === "set:away") return toggleAway();
       if (k === "set:speak") { prefs.speak = !prefs.speak; savePrefs(); if (prefs.speak) say("Alerts will be spoken"); return render(); }
+      if (k === "set:steps") { prefs.steps = !prefs.steps; savePrefs(); return render(); }
+      if (k === "set:bold") { prefs.bold = !prefs.bold; savePrefs(); return render(); }
+      if (k === "set:size" || k === "set:dim" || k === "set:font") { cycle(k.slice(4)); savePrefs(); return render(); }
       if (k.startsWith("qr:") || k === "unpair") return settingsAction(k);
       if (k.startsWith("g:") || k === "tasks") { chat.open.has(k) ? chat.open.delete(k) : chat.open.add(k); return render(); }
       if (k.startsWith("i:")) return itemAction(k);
@@ -511,10 +541,9 @@
   function itemAction(k) {
     const it = chat.items.find((x) => "i:" + x.key === k);
     if (!it) return;
-    if (it.images && it.images.length && it.role !== "tool") return openImages(it);
+    if (it.images && it.images.length) return openImages(it);
     if (it.role === "assistant") return toggleRead(it.text);
-    if (it.role === "tool") { // pinch a tool step: its command, output or diff; screenshots open full screen
-      if (it.images && it.images.length) return openImages(it);
+    if (it.role === "tool") { // only with "Show Claude's steps": pinch a step for its command, output or diff
       if (chat.open.has(k)) chat.open.delete(k); else chat.open.add(k);
       return render();
     }
@@ -532,13 +561,12 @@
   async function toggleAway() {
     const j = await api("/api/away", { body: { on: !S.away } });
     S.away = j.away;
-    toast(S.away ? "Away on: questions come to the glasses" : "Away off: questions stay on the laptop", true);
+    toast(S.away ? "Away on: questions come here, replies kept short" : "Away off: questions stay on the laptop", true);
     render();
   }
 
   function settingsAction(k) {
-    const again = confirming(k);
-    if (!again) { Object.assign(confirmKey, { k, at: Date.now() }); return render(); }
+    if (!confirming(k)) { Object.assign(confirmKey, { k, at: Date.now() }); return render(); }
     confirmKey.k = null;
     if (k === "unpair") { ["token", "gist", "api"].forEach(LS.del); location.reload(); return; }
     if (k === "qr:reset") prefs.quick = DEFAULT_QUICK.slice();
@@ -574,10 +602,10 @@
   }
 
   function pickOption(k) {
-    const [, qi, oi] = k.split(":").map(Number), h = chat.session.held, q = h.questions[qi], a = chat.answers[qi], label = q.options[oi].label;
-    if (q.multiSelect) { a.picked = a.picked.includes(label) ? a.picked.filter((x) => x !== label) : a.picked.concat(label); return render(); }
-    a.picked = [label]; a.other = "";
-    if (autoSubmit()) return; // like the CLI: picking the answer to the last open question sends it
+    const [, qi, oi] = k.split(":").map(Number), h = chat.session.held, q = h.questions[qi], a = chat.answers[qi], lbl = q.options[oi].label;
+    if (q.multiSelect) { a.picked = a.picked.includes(lbl) ? a.picked.filter((x) => x !== lbl) : a.picked.concat(lbl); return render(); }
+    a.picked = [lbl]; a.other = "";
+    if (autoSubmit()) return; // like the Claude app: picking the answer to the last open question sends it
     focusKey.chat = qi + 1 < h.questions.length ? `o:${qi + 1}:0` : "submit";
     render();
   }
@@ -673,7 +701,7 @@
     if (!chat) return;
     const id = chat.id;
     try {
-      const j = await api(`/api/sessions/${encodeURIComponent(id)}?limit=60`);
+      const j = await api(`/api/sessions/${encodeURIComponent(id)}?limit=80`);
       if (!chat || chat.id !== id) return;
       if (chat.items.length && j.start > chat.start) chat.items = chat.items.slice(0, j.start - chat.start).concat(j.items);
       else { chat.items = j.items; chat.start = j.start; }
@@ -692,7 +720,7 @@
     if (!chat || chat.start <= 0 || chat.loadingOlder) return;
     chat.loadingOlder = true;
     try {
-      const j = await api(`/api/sessions/${encodeURIComponent(chat.id)}?before=${chat.start}&limit=40`);
+      const j = await api(`/api/sessions/${encodeURIComponent(chat.id)}?before=${chat.start}&limit=60`);
       const sc = $app.querySelector(".scroll");
       chat.keepTop = sc ? sc.scrollHeight - sc.scrollTop : null;
       chat.items = j.items.concat(chat.items);
@@ -729,7 +757,7 @@
       if (ev.type === "held" && ev.held) { toast(`${name} needs you: ${ev.held.kind === "question" ? "a question" : "an approval"}`); say(`${name} needs you`); }
       if (ev.type === "state" && ev.to === "waiting" && !ev.held) { toast(`${name} is waiting on the laptop`); say(`${name} is waiting on the laptop`); }
     }
-    if (listDirty || top().type === "list") refreshListSoon(); // the chat screen uses the list too (Next row)
+    if (listDirty || top().type === "list") refreshListSoon();
     if (chatDirty) refreshChatSoon();
   }
 
@@ -760,10 +788,10 @@
     polling = false;
   }
 
-  // live clock without re-rendering (spinner elapsed time)
+  // live clock without re-rendering (status line elapsed time)
   setInterval(() => {
     if (document.hidden || !chat || !chat.session || chat.session.state !== "running") return;
-    const el = $app.querySelector(".spin .el");
+    const el = $app.querySelector(".status .el");
     if (el) el.textContent = dur(Date.now() - chat.session.since);
   }, 1000);
 

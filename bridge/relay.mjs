@@ -5,11 +5,18 @@
 // - Questions (AskUserQuestion via PreToolUse) and permission prompts (PermissionRequest) arrive as HTTP hooks.
 //   While Away mode is on they are held here until you answer on the glasses; otherwise the hook returns at
 //   once and the normal laptop dialog shows. Turning Away off hands anything held back to the laptop.
-import { writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { INBOX, doorbell } from "./inbox.mjs";
+import { writeFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { INBOX, doorbell, HERE } from "./inbox.mjs";
+
+const STATE = join(HERE, ".local", "state.json"); // Away mode survives bridge restarts
 
 mkdirSync(INBOX, { recursive: true });
 
+// Shared with hooks/deliver.mjs (glasses messages): what Claude is told so replies fit the small glasses screen.
+export const BRIEF = "The user is away from the laptop and reads your replies on small smart glasses (a few lines at a time). " +
+  "End your turn with a short final message: 2 to 4 short bullets with the key results and anything you need from them. " +
+  "No long explanations, tables or code blocks unless they ask.";
 const HOLD_MS = 55 * 60e3;       // hooks are configured with a 3600 s timeout; always answer before that
 
 export class Relay {
@@ -19,11 +26,17 @@ export class Relay {
     this.sent = new Map();       // sessionId -> last messages sent from the glasses, shown in the chat
     this.held = new Map();       // sessionId -> { kind: question|permission, key, payload, reply(json), at }
     this.forced = false;         // Away mode: switched on and off from the glasses only (user's choice)
+    try { this.forced = !!JSON.parse(readFileSync(STATE, "utf8")).away; } catch {}
     this.onEvent = () => {};
   }
 
   get away() { return this.forced; }
-  set away(on) { this.forced = !!on; if (!on) this.releaseAll(); this.onEvent({ type: "away", away: this.forced }); }
+  set away(on) {
+    this.forced = !!on;
+    try { writeFileSync(STATE, JSON.stringify({ away: this.forced })); } catch {}
+    if (!on) this.releaseAll();
+    this.onEvent({ type: "away", away: this.forced });
+  }
 
   sentFor(id) { return (this.sent.get(id) || []).map(({ id, text, at, deliveredAt }) => ({ id, text, at, delivered: !!deliveredAt })); }
 
@@ -103,6 +116,9 @@ export class Relay {
       for (const m of q) m.deliveredAt = Date.now();
       if (q.length) this.onEvent({ type: "delivered", id: sid, ids: q.map((m) => m.id) });
       return send(res, 200, { messages: q });
+    }
+    if (name === "prompt") { // UserPromptSubmit from the laptop or phone: while Away, Claude writes for the glasses
+      return send(res, 200, this.away ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: BRIEF } } : "");
     }
     if (name === "ask" || name === "permission") {
       const empty = () => send(res, 200, "");

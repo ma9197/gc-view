@@ -25,7 +25,8 @@ try {
   if (!texts.length) quiet();
   process.stderr.write(
     "Message from the user, typed or dictated in GlassCode (their own glasses remote, relayed by a hook they installed). " +
-    "If something needs their approval, ask with AskUserQuestion: they can answer from the glasses.\n\n" +
+    "If something needs their approval, ask with AskUserQuestion: they can answer from the glasses. " +
+    "They read your reply on small glasses: end with 2 to 4 short bullets with the key points and anything you need from them.\n\n" +
     texts.join("\n\n---\n\n") + "\n",
     () => process.exit(2),
   );
