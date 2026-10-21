@@ -19,10 +19,10 @@
   const DEFAULT_QUICK = ["Continue", "Yes, go ahead", "No, stop there", "Run the tests", "Summarize where you are in 3 short bullets", "What do you need from me?"];
   const CHOICES = {
     size: [["s", "Small"], ["m", "Medium"], ["l", "Large"], ["xl", "Extra large"]],
-    dim: [["soft", "Soft"], ["dim", "Dim"], ["dimmer", "Dimmer"], ["black", "Darkest"]],
+    dim: [["cover1", "Cover: light"], ["cover2", "Cover: medium"], ["cover3", "Cover: strong"], ["black", "See-through"], ["dimmer", "Faint panels"], ["dim", "Panels"]],
     font: [["sans", "Clean"], ["serif", "Serif (Claude style)"]],
   };
-  const prefs = Object.assign({ speak: true, offline: false, quick: DEFAULT_QUICK, size: "m", dim: "dimmer", bold: false, font: "sans", steps: false }, LS.get("prefs", {}));
+  const prefs = Object.assign({ speak: true, offline: false, quick: DEFAULT_QUICK, size: "m", dim: "cover2", bold: false, font: "sans", steps: false }, LS.get("prefs", {}));
   const savePrefs = () => { LS.set("prefs", prefs); applyPrefs(); };
   function applyPrefs() {
     const d = document.documentElement.dataset;
@@ -146,6 +146,7 @@
       if (gi < 0) return focusEl((dir === "up" ? gs[gs.length - 1] : gs[0])[0], dir);
     }
     const g = gs[gi], ci = g.indexOf(cur);
+    if (dir === "right" && !g[ci + 1] && top().type === "chat") { const box = $app.querySelector('[data-k="speak"]'); if (box && box !== cur) return focusEl(box, dir); }
     if (dir === "left" || dir === "right") return focusEl(g[ci + (dir === "right" ? 1 : -1)], dir);
     const sc = cur.closest(".scroll");
     if (sc && g.length === 1) { // read long messages in steps before moving on
@@ -305,7 +306,7 @@
       }
     }
     $app.innerHTML = `<div class="top" data-row><span class="title">${spark()}<span>GlassCode</span><span class="dot conn ${online ? "c-done" : "c-err"}"></span></span>
-        <button class="pill btn${S.away ? " on" : ""}" data-f data-k="away">Away ${S.away ? "on" : "off"}</button><button class="pill btn" data-f data-k="settings">Settings</button></div>
+        <button class="pill btn${S.away ? " on" : ""}" data-f data-k="away">Away ${S.away ? "on" : "off"}</button><button class="pill btn" data-f data-k="updates">Hear updates</button><button class="pill btn" data-f data-k="settings">Settings</button></div>
       <div class="scroll">${body}</div>`;
     restoreFocus(".scroll [data-f]");
   }
@@ -318,7 +319,7 @@
       ${item("set:bold", "Bold text", prefs.bold ? "On" : "Off", prefs.bold)}
       ${item("set:font", "Reply font", label("font"))}
       ${item("set:dim", "Background", label("dim"))}
-      <div class="preview">Preview: Claude's replies look like this. Black is see-through on the glasses; "Darkest" removes the grey panels.</div>
+      <div class="preview">Preview: Claude's replies look like this. The glasses can't show black (it is see-through), so "Cover" puts a grey layer over what's behind you. Stronger = less of the world.</div>
       <div class="sect">Chats</div>
       ${item("set:away", "Away mode", S.away ? "On" : "Off", S.away)}
       ${item("set:speak", "Speak alerts out loud", prefs.speak ? "On" : "Off", prefs.speak)}
@@ -516,6 +517,7 @@
       if (k.startsWith("s:")) return openChat(k.slice(2));
       if (k === "offline" || k === "set:offline") { prefs.offline = !prefs.offline; savePrefs(); return render(); }
       if (k === "settings") return go({ type: "settings" });
+      if (k === "updates") return speakUpdates();
       if (k === "away" || k === "set:away") return toggleAway();
       if (k === "set:speak") { prefs.speak = !prefs.speak; savePrefs(); if (prefs.speak) say("Alerts will be spoken"); return render(); }
       if (k === "set:steps") { prefs.steps = !prefs.steps; savePrefs(); return render(); }
@@ -676,6 +678,21 @@
     speechSynthesis.speak(u);
     render();
   }
+  // Spoken summary on request: who needs you, what finished since you last looked, what is working.
+  function speakUpdates() {
+    const live = S.sessions.filter((s) => s.state !== "offline");
+    const need = live.filter((s) => s.state === "waiting").map((s) => s.name);
+    const fresh = live.filter(isNew).map((s) => s.name);
+    const work = live.filter((s) => s.state === "running").length;
+    const parts = [];
+    if (need.length) parts.push(`${need.length} need you: ${need.join(", ")}.`);
+    if (fresh.length) parts.push(`${fresh.length} finished: ${fresh.join(", ")}.`);
+    parts.push(work ? `${work} working.` : "Nothing is working right now.");
+    const text = parts.join(" ");
+    toast(text, !need.length);
+    if (window.speechSynthesis) { stopSpeaking(); try { speechSynthesis.speak(new SpeechSynthesisUtterance(text)); } catch {} }
+  }
+
   function say(text) {
     if (!prefs.speak || speaking || !window.speechSynthesis) return;
     try { speechSynthesis.speak(new SpeechSynthesisUtterance(text)); } catch {}
@@ -690,7 +707,13 @@
     } catch (e) { S.error = e.message; }
     if (top().type === "list") render();
   }
-  async function hello() { try { const j = await api("/api/hello"); S.laptop = j.laptop; S.away = j.away; } catch {} }
+  async function hello() {
+    try {
+      const j = await api("/api/hello");
+      S.laptop = j.laptop; S.away = j.away;
+      if (!S.seq) S.seq = j.seq; // start from now: don't replay alerts you already heard
+    } catch {}
+  }
 
   async function openChat(id) {
     const s = S.sessions.find((x) => x.id === id);
@@ -749,13 +772,18 @@
   }
   const refreshChatSoon = () => { clearTimeout(chatTimer); chatTimer = setTimeout(refreshChat, 400); };
 
+  // Alerts only for news: never for events older than a minute or already alerted (e.g. after the display slept).
+  let alertAt = LS.get("alertAt", 0);
   function handle(events) {
     let chatDirty = false, listDirty = false;
     for (const ev of events) {
+      const fresh = ev.at > alertAt && ev.at > Date.now() - 60000;
+      if (ev.at > alertAt) { alertAt = ev.at; LS.set("alertAt", alertAt); }
       if (ev.type === "away") { S.away = ev.away; listDirty = true; }
       const mine = chat && ev.id === chat.id, name = ev.name || "A chat";
       if (mine && ["items", "state", "held", "delivered"].includes(ev.type)) chatDirty = true;
       if (ev.type === "state" || ev.type === "held") listDirty = true;
+      if (!fresh) continue;
       if (ev.type === "state" && ev.from === "running" && ev.to === "idle") { toast(`${mine ? "" : name + ": "}Claude finished`, true); say(`${name} finished`); }
       if (ev.type === "held" && ev.held) { toast(`${name} needs you: ${ev.held.kind === "question" ? "a question" : "an approval"}`); say(`${name} needs you`); }
       if (ev.type === "state" && ev.to === "waiting" && !ev.held) { toast(`${name} is waiting on the laptop`); say(`${name} is waiting on the laptop`); }
@@ -805,7 +833,7 @@
     render();
     if (!LS.get("token")) return;
     if (!API) await lookup();
-    hello();
+    await hello();
     await loadList();
     poll();
   }

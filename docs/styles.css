@@ -15,12 +15,16 @@
 :root[data-dim="soft"]   { --panel: rgba(255, 255, 255, .13); --panel-hi: rgba(255, 255, 255, .2); }
 :root[data-dim="dimmer"] { --panel: rgba(255, 255, 255, .045); --panel-hi: rgba(255, 255, 255, .1); }
 :root[data-dim="black"]  { --panel: transparent; --panel-hi: rgba(255, 255, 255, .06); }
+/* "Cover": the glasses can't draw black, so a grey layer hides the world behind; text stays bright on top */
+:root[data-dim="cover1"] { --page: #222; --panel: rgba(255, 255, 255, .06); --panel-hi: rgba(255, 255, 255, .13); }
+:root[data-dim="cover2"] { --page: #3a3a3a; --panel: rgba(255, 255, 255, .07); --panel-hi: rgba(255, 255, 255, .15); --text2: #dddbd2; --text3: #b9b7ae; }
+:root[data-dim="cover3"] { --page: #555; --panel: rgba(255, 255, 255, .08); --panel-hi: rgba(255, 255, 255, .17); --text2: #e8e6de; --text3: #cfcdc4; }
 :root[data-size="s"]  { --fs: 17px; } :root[data-size="l"] { --fs: 22px; } :root[data-size="xl"] { --fs: 25px; }
 :root[data-bold="1"]  { --fw: 700; }
 :root[data-font="serif"] { --reply: "Source Serif 4", Georgia, "Times New Roman", serif; }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color: var(--text); font: var(--fw) var(--fs)/1.45 var(--ui); -webkit-font-smoothing: antialiased; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--page, #000); color: var(--text); font: var(--fw) var(--fs)/1.45 var(--ui); -webkit-font-smoothing: antialiased; }
 button, input { font: inherit; color: inherit; }
 button { background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
 :focus { outline: none; }

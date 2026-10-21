@@ -146,6 +146,8 @@ export class Transcript {
     if (d.type === "user") {
       if (d.isMeta || d.isCompactSummary) return;
       if (typeof m.content === "string") {
+        const g = glassesText(m.content); // a glasses message that woke an idle chat is stored as a user turn
+        if (g) { this.push({ key: d.uuid, role: "user", via: "glasses", time, text: clip(g) }); return; }
         const t = cleanUserText(m.content);
         if (t && !t.startsWith("<local-command") && !t.startsWith("<task-notification>")) this.push({ key: d.uuid, role: "user", time, text: clip(t) });
         return;
