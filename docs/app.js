@@ -146,6 +146,7 @@
       if (gi < 0) return focusEl((dir === "up" ? gs[gs.length - 1] : gs[0])[0], dir);
     }
     const g = gs[gi], ci = g.indexOf(cur);
+    if (dir === "right" && top().type === "list" && /^s:/.test(cur.dataset.k || "")) return openMenu(cur.dataset.k.slice(2));
     if (dir === "right" && !g[ci + 1] && top().type === "chat") { const box = $app.querySelector('[data-k="speak"]'); if (box && box !== cur) return focusEl(box, dir); }
     if (dir === "left" || dir === "right") return focusEl(g[ci + (dir === "right" ? 1 : -1)], dir);
     const sc = cur.closest(".scroll");
@@ -191,6 +192,13 @@
     const t = e.target, inInput = t && t.tagName === "INPUT";
     if (e.key === "Unidentified") return; // the glasses' center tap: not a command
     if (KEYS[e.key]) { e.preventDefault(); move(KEYS[e.key]); return; }
+    if (e.key === "Enter" && keyupSeen && t && /^s:/.test((t.dataset && t.dataset.k) || "")) { // a chat in the list: tap or hold
+      e.preventDefault();
+      if (e.repeat) { if (hold && !hold.menu) { clearTimeout(hold.timer); hold.menu = true; openMenu(hold.k.slice(2)); } return; }
+      const h = (hold = { k: t.dataset.k, menu: false });
+      h.timer = setTimeout(() => { if (hold === h) { h.menu = true; openMenu(h.k.slice(2)); } }, 550);
+      return;
+    }
     if (e.key === "Enter") {
       if (inInput || (t && t.tagName === "BUTTON")) return; // native: the composer opens / the button clicks
       if (t && t.dataset && t.dataset.k) { e.preventDefault(); activate(t); }
@@ -200,6 +208,19 @@
       e.preventDefault(); back();
     }
   });
+  // Press and hold a chat for its options. The tap opens the chat on release; a hold of 0.55 s opens the menu.
+  // Only used once a keyup has been seen (if the glasses never send one, every tap would look like a hold):
+  // until then a pinch opens the chat at once, and swipe right opens the options.
+  let hold = null, keyupSeen = LS.get("keyup", false);
+  document.addEventListener("keyup", (e) => {
+    if (e.key !== "Enter") return;
+    if (!keyupSeen) { keyupSeen = true; LS.set("keyup", true); return; }
+    const h = hold;
+    hold = null;
+    if (h && !h.menu) { clearTimeout(h.timer); openChat(h.k.slice(2)); }
+  });
+  $app.addEventListener("contextmenu", (e) => { const t = e.target.closest('[data-k^="s:"]'); if (t) { e.preventDefault(); openMenu(t.dataset.k.slice(2)); } });
+
   // The middle-pinch Back arrives as history.back(): keep one guard entry while off the home screen.
   let guarded = false;
   function guard() { if (stack.length > 1 && !guarded) { try { history.pushState({ gc: 1 }, ""); guarded = true; } catch {} } }
@@ -274,6 +295,31 @@
     if (t.type === "settings") return renderSettings();
     if (t.type === "chat") return renderChat();
     if (t.type === "image") return renderImage();
+    if (t.type === "menu") return renderMenu();
+    if (t.type === "hidden") return renderHidden();
+  }
+
+  function openMenu(id) { if (top().type === "list") go({ type: "menu", id }); }
+  function renderMenu() {
+    const s = S.sessions.find((x) => x.id === top().id) || { name: "Chat" };
+    const opt = (k, name, sub) => `<button class="set" data-f data-k="${k}"><span>${name}${sub ? `<br><span class="t3" style="font-size:.8em">${sub}</span>` : ""}</span></button>`;
+    $app.innerHTML = `<div class="top"><span class="title"><span>${esc(s.name)}</span></span></div><div class="scroll">
+      ${opt("m:hide", "Remove from list", "It stays on the laptop. Bring it back in Settings.")}
+      ${opt("m:read", "Mark as read")}
+      ${opt("m:open", "Open chat")}
+      <div class="note">Back to cancel</div></div>`;
+    focusKey.menu = null;
+    restoreFocus(".scroll [data-f]");
+  }
+  function renderHidden() {
+    const list = top().list;
+    const body = !list ? '<div class="empty">Loading...</div>' : !list.length ? '<div class="empty">No hidden chats.</div>'
+      : list.map((s) => `<button class="set" data-f data-k="h:${esc(s.id)}"><span>${esc(s.name)}</span><span class="sv">Show again</span></button>`).join("");
+    $app.innerHTML = `<div class="top"><span class="title"><span>Hidden chats</span></span></div><div class="scroll">${body}<div class="note">Pinch a chat to put it back in the list</div></div>`;
+    restoreFocus(".scroll [data-f]");
+  }
+  async function loadHidden() {
+    try { const j = await api("/api/hidden"); if (top().type === "hidden") { top().list = j.sessions; render(); } } catch (e) { toast(e.message); }
   }
 
   function renderPair() {
@@ -325,6 +371,7 @@
       ${item("set:speak", "Speak alerts out loud", prefs.speak ? "On" : "Off", prefs.speak)}
       ${item("set:steps", "Show Claude's steps", prefs.steps ? "On" : "Off", prefs.steps)}
       ${item("set:offline", "Show offline chats", prefs.offline ? "On" : "Off", prefs.offline)}
+      ${item("set:hidden", "Hidden chats", String(S.hiddenCount || 0))}
       <div class="sect">Quick replies (pinch one twice to remove)</div>
       ${prefs.quick.map((q, i) => item("qr:" + i, esc(q), confirming("qr:" + i) ? "Pinch again to remove" : "", false, "danger")).join("")}
       <input class="field" type="text" data-f data-k="qradd" autocomplete="off" placeholder="+ Add a quick reply (speak or type)">
@@ -517,6 +564,17 @@
       if (k.startsWith("s:")) return openChat(k.slice(2));
       if (k === "offline" || k === "set:offline") { prefs.offline = !prefs.offline; savePrefs(); return render(); }
       if (k === "settings") return go({ type: "settings" });
+      if (k === "m:hide" || k === "m:read" || k === "m:open") {
+        const id = top().id, s = S.sessions.find((x) => x.id === id);
+        if (k === "m:open") { stack.pop(); return openChat(id); } // menu -> chat (keeps the one Back guard)
+        if (k === "m:read") { markSeen(id); return back(); }
+        await api("/api/hidden", { body: { id, hidden: true } });
+        S.sessions = S.sessions.filter((x) => x.id !== id);
+        toast(`Removed ${s ? s.name : "chat"}. Settings > Hidden chats brings it back.`, true);
+        return back();
+      }
+      if (k === "set:hidden") { go({ type: "hidden", list: null }); return loadHidden(); }
+      if (k.startsWith("h:")) { await api("/api/hidden", { body: { id: k.slice(2), hidden: false } }); toast("Back in the list", true); return loadHidden(); }
       if (k === "updates") return speakUpdates();
       if (k === "away" || k === "set:away") return toggleAway();
       if (k === "set:speak") { prefs.speak = !prefs.speak; savePrefs(); if (prefs.speak) say("Alerts will be spoken"); return render(); }
@@ -702,7 +760,7 @@
   async function loadList() {
     try {
       const j = await api("/api/sessions");
-      S.sessions = j.sessions; S.away = j.away; S.loaded = true; S.error = null;
+      S.sessions = j.sessions; S.away = j.away; S.hiddenCount = j.hiddenCount || 0; S.loaded = true; S.error = null;
       if (!LS.get("seen", null)) { j.sessions.forEach((s) => { seen[s.id] = Date.now(); }); LS.set("seen", seen); } // first run: all read
     } catch (e) { S.error = e.message; }
     if (top().type === "list") render();

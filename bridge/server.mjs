@@ -72,6 +72,7 @@ function tick() {
   let list;
   try { list = sessions.list(); } catch (e) { log("list failed", e.stack); return; }
   for (const s of list) {
+    if (relay.hidden.has(s.id)) continue; // removed from the list: no alerts either
     overlay(s);
     const t = sessions.transcripts.get(s.id), version = t ? t.version : 0, p = prev.get(s.id);
     if (p && (p.state !== s.state || p.waitingFor !== s.waitingFor)) {
@@ -148,7 +149,21 @@ const server = http.createServer(async (req, res) => {
     if (!authed(req, TOKEN)) return setTimeout(() => send(res, throttled(req) ? 429 : 401, { error: "unauthorized" }), throttled(req) ? 3000 : 0);
 
     if (parts[1] === "hello") return send(res, 200, { ok: true, version: VERSION, laptop: hostname(), away: relay.away, forced: relay.forced, seq });
-    if (parts[1] === "sessions" && parts.length === 2) return send(res, 200, { sessions: sessions.list().map((s) => publicSession(overlay(s))), seq, away: relay.away });
+    if (parts[1] === "sessions" && parts.length === 2) {
+      const all = sessions.list();
+      return send(res, 200, { sessions: all.filter((s) => !relay.hidden.has(s.id)).map((s) => publicSession(overlay(s))), seq, away: relay.away, hiddenCount: all.filter((s) => relay.hidden.has(s.id)).length });
+    }
+    // chats removed from the glasses list: GET lists them (to bring one back), POST { id, hidden } changes one
+    if (parts[1] === "hidden") {
+      if (req.method === "POST") {
+        const body = await readJson(req);
+        if (typeof body.id !== "string" || !body.id) return send(res, 400, { error: "no chat" });
+        relay.setHidden(body.id, body.hidden !== false);
+        log("hidden", body.id, body.hidden !== false);
+        return send(res, 200, { ok: true });
+      }
+      return send(res, 200, { sessions: sessions.list().filter((s) => relay.hidden.has(s.id)).map((s) => ({ id: s.id, name: s.name, folder: s.cwd ? s.cwd.split(/[\\/]/).pop() : null, state: s.state })) });
+    }
 
     if (parts[1] === "sessions" && parts[2]) {
       const s = sessions.get(parts[2]) && overlay(sessions.get(parts[2]));

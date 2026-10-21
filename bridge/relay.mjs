@@ -9,7 +9,7 @@ import { writeFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { INBOX, doorbell, HERE } from "./inbox.mjs";
 
-const STATE = join(HERE, ".local", "state.json"); // Away mode survives bridge restarts
+const STATE = join(HERE, ".local", "state.json"); // Away mode and hidden chats survive bridge restarts
 
 mkdirSync(INBOX, { recursive: true });
 
@@ -26,14 +26,17 @@ export class Relay {
     this.sent = new Map();       // sessionId -> last messages sent from the glasses, shown in the chat
     this.held = new Map();       // sessionId -> { kind: question|permission, key, payload, reply(json), at }
     this.forced = false;         // Away mode: switched on and off from the glasses only (user's choice)
-    try { this.forced = !!JSON.parse(readFileSync(STATE, "utf8")).away; } catch {}
+    this.hidden = new Set();     // chats removed from the glasses list (still on the laptop, just not shown)
+    try { const st = JSON.parse(readFileSync(STATE, "utf8")); this.forced = !!st.away; this.hidden = new Set(st.hidden || []); } catch {}
     this.onEvent = () => {};
   }
 
   get away() { return this.forced; }
+  save() { try { writeFileSync(STATE, JSON.stringify({ away: this.forced, hidden: [...this.hidden] })); } catch {} }
+  setHidden(id, on) { if (on) this.hidden.add(id); else this.hidden.delete(id); this.save(); }
   set away(on) {
     this.forced = !!on;
-    try { writeFileSync(STATE, JSON.stringify({ away: this.forced })); } catch {}
+    this.save();
     if (!on) this.releaseAll();
     this.onEvent({ type: "away", away: this.forced });
   }
