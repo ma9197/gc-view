@@ -1,0 +1,3 @@
+﻿# local secrets, logs, inbox, downloaded tools: never commit
+bridge/.local/
+node_modules/

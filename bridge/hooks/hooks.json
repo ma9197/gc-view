@@ -1,0 +1,70 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\Program Files\\nodejs\\node.exe",
+            "args": [
+              "D:\\Files\\SlefProjects\\Meta Glasses\\glasscode\\bridge\\hooks\\watch.mjs"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "CwdChanged": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\Program Files\\nodejs\\node.exe",
+            "args": [
+              "D:\\Files\\SlefProjects\\Meta Glasses\\glasscode\\bridge\\hooks\\watch.mjs"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "FileChanged": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\Program Files\\nodejs\\node.exe",
+            "args": [
+              "D:\\Files\\SlefProjects\\Meta Glasses\\glasscode\\bridge\\hooks\\deliver.mjs"
+            ],
+            "asyncRewake": true,
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8791/hook/ask",
+            "timeout": 3600
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8791/hook/permission",
+            "timeout": 3600
+          }
+        ]
+      }
+    ]
+  }
+}
