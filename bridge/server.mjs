@@ -34,18 +34,21 @@ const sessions = new Sessions();
 const relay = new Relay(sessions);
 const log = (...a) => appendFileSync(join(LOCAL, "bridge.log"), new Date().toISOString() + " " + a.join(" ") + "\n");
 
-// ---------- auth with lockout (the token is 256-bit, the lockout just stops noise) ----------
-let fails = [], lockedUntil = 0;
+// ---------- auth (the token is 256-bit, so guessing is hopeless) ----------
+// The right key is ALWAYS accepted. Wrong keys are slowed down per client, never for everyone: a global lockout
+// let one stale tab (or a stranger) lock the real glasses out (2026-10-21).
+const fails = new Map(); // client -> recent failure times
+const client = (req) => String(req.headers["cf-connecting-ip"] || req.socket.remoteAddress || "?");
 function authed(req, secret) {
-  if (Date.now() < lockedUntil) return false;
   const h = req.headers.authorization || "";
-  const ok = h.startsWith("Bearer ") && timingSafeEqual(sha(h.slice(7)), secret);
-  if (!ok) {
-    fails = fails.filter((t) => t > Date.now() - 600e3).concat(Date.now());
-    if (fails.length >= 20) { lockedUntil = Date.now() + 900e3; log("LOCKOUT after 20 bad tokens"); }
-  }
-  return ok;
+  if (h.startsWith("Bearer ") && timingSafeEqual(sha(h.slice(7)), secret)) return true;
+  const c = client(req), list = (fails.get(c) || []).filter((t) => t > Date.now() - 600e3).concat(Date.now());
+  fails.set(c, list);
+  if (list.length === 20) log("20 bad keys from", c, "in 10 min");
+  if (fails.size > 1000) fails.clear(); // memory bound
+  return false;
 }
+const throttled = (req) => (fails.get(client(req)) || []).length >= 20;
 
 const sign = (sid, img, exp) => createHmac("sha256", config.imgKey).update(`${sid}|${img}|${exp}`).digest("hex").slice(0, 32);
 function imgUrl(sid, img) {
@@ -142,7 +145,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (parts[0] !== "api") return send(res, 404, { error: "not found" });
-    if (!authed(req, TOKEN)) return send(res, Date.now() < lockedUntil ? 429 : 401, { error: "unauthorized" });
+    if (!authed(req, TOKEN)) return setTimeout(() => send(res, throttled(req) ? 429 : 401, { error: "unauthorized" }), throttled(req) ? 3000 : 0);
 
     if (parts[1] === "hello") return send(res, 200, { ok: true, version: VERSION, laptop: hostname(), away: relay.away, forced: relay.forced, seq });
     if (parts[1] === "sessions" && parts.length === 2) return send(res, 200, { sessions: sessions.list().map((s) => publicSession(overlay(s))), seq, away: relay.away });

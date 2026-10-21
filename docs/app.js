@@ -52,6 +52,7 @@
     return API;
   }
   async function api(path, opts = {}) {
+    if (!LS.get("token")) throw Object.assign(new Error("This device is not paired. Open the GlassCode link again."), { auth: true }); // never poll with no key
     if (!API) await lookup();
     if (!API) { setOnline(false); throw new Error("Looking for the laptop..."); }
     const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), opts.timeout || 15000);
@@ -62,7 +63,8 @@
         body: opts.body ? JSON.stringify(opts.body) : undefined,
       });
       const j = await r.json().catch(() => ({}));
-      if (r.status === 401 || r.status === 429) { setOnline(false); throw Object.assign(new Error("The laptop refused this device's key. Open the GlassCode link again."), { auth: true }); }
+      if (r.status === 401) { setOnline(false); throw Object.assign(new Error("This device's key does not match the laptop. Open the GlassCode link again."), { auth: true }); }
+      if (r.status === 429) { setOnline(false); throw new Error("Too many wrong keys from this network. Retrying..."); }
       if (!r.ok) throw new Error(j.error || "Error " + r.status);
       setOnline(true);
       return j;
@@ -77,6 +79,7 @@
     online = on;
     const d = document.querySelector(".conn");
     if (d) d.className = "dot conn " + (on ? "ok" : "err");
+    if (top().type === "chat") render(); // show or clear the "reconnecting" warning on stale status
   }
 
   // ---------- state ----------
@@ -443,7 +446,7 @@
 
     const draft = LS.get("draft:" + chat.id, "");
     const t = chat.session && chat.session.tasks;
-    const spinner = s.state === "running" ? `<div class="spin" data-row>${star(true)}<span class="v">${esc((t && t.active) || "Working")}&hellip; <span class="dim">(<span class="el">${dur(Date.now() - s.since)}</span>${t ? ` &middot; ${t.done}/${t.total} tasks` : ""})</span></span>
+    const spinner = s.state === "running" && online ? `<div class="spin" data-row>${star(true)}<span class="v">${esc((t && t.active) || "Working")}&hellip; <span class="dim">(<span class="el">${dur(Date.now() - s.since)}</span>${t ? ` &middot; ${t.done}/${t.total} tasks` : ""})</span></span>
       ${s.canSend ? `<button class="chip" data-f data-k="stop">${confirming("stop") ? "Pinch again to stop" : "Stop"}</button>` : ""}</div>` : "";
     const quick = s.canSend && !s.held ? `<div class="chips" data-row>${prefs.quick.map((q, i) => `<button class="chip" data-f data-k="q:${i}">${esc(q)}</button>`).join("")}</div>` : "";
     const prompt = s.canSend
@@ -454,7 +457,9 @@
     // like the CLI mode line; only shown when it matters, to keep the transcript big
     const modeline = speaking ? '<div class="modeline cl">reading aloud &middot; pinch the reply again to stop</div>' : S.away ? '<div class="modeline"><span class="warn">&raquo; away mode on</span> &middot; questions come here</div>' : "";
 
-    $app.innerHTML = `<div class="head"><span class="n">${esc(s.name)}</span><span class="st ${COLOR[s.state]}">${mark(s)}${esc(stateText(s))}</span></div>
+    // stale data must look stale: while the laptop can't be reached, say so instead of a frozen "working"
+    const state = online ? `<span class="st ${COLOR[s.state]}">${mark(s)}${esc(stateText(s))}</span>` : `<span class="st err">${dot("blink")}reconnecting...</span>`;
+    $app.innerHTML = `<div class="head"><span class="n">${esc(s.name)}</span>${state}</div>
       <div class="scroll">${html}</div><div class="bottom">${spinner}${quick}${prompt}${modeline}</div>`;
 
     const nsc = $app.querySelector(".scroll");
@@ -741,7 +746,13 @@
         if (j.events.length) handle(j.events);
         wait = 1000;
       } catch (e) {
-        if (e.auth) { S.error = e.message; S.loaded = false; if (top().type === "list") render(); }
+        if (e.auth) { // a rejected key will not fix itself: stop asking, say what to do, check again in a minute
+          S.error = e.message; S.loaded = false;
+          if (top().type === "list") render(); else toast(e.message);
+          polling = false;
+          setTimeout(() => { if (LS.get("token")) poll(); }, 60000);
+          return;
+        }
         await sleep(wait);
         wait = Math.min(wait * 2, 15000);
       }
