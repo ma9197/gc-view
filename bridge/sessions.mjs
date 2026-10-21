@@ -88,7 +88,8 @@ export class Sessions {
       out.push({
         id: r.sessionId, name: r.name || null, cwd: r.cwd, pid: r.pid, file,
         remote: !!r.bridgeSessionId, desktop: r.entrypoint === "claude-desktop",
-        state: r.status === "busy" ? "running" : r.status === "waiting" ? "waiting" : "idle",
+        state: r.status === "busy" ? "running" : r.status === "waiting" ? "waiting" : "idle", startedAt: r.startedAt || 0,
+        turn: r.status === "busy" ? "busy" : "idle", // the main conversation only (background work aside)
         waitingFor: r.waitingFor || null, since: r.statusUpdatedAt || r.updatedAt || r.startedAt,
       });
     }
@@ -105,6 +106,10 @@ export class Sessions {
         if (p) s.waitingFor = p.role === "question" ? "question" : "permission";
         s.last = lastLine(t);
         s.tasks = t.progress();
+        // not "done" while background agents/commands it started are still running (only this process's own)
+        const bg = s.state !== "offline" ? t.background(s.startedAt) : [];
+        s.background = bg.length ? bg.map((e) => ({ name: e.name, desc: e.desc })) : null;
+        if (bg.length && s.state === "idle") { s.state = "running"; s.since = Math.min(...bg.map((e) => e.time)); }
         s.activity = s.state === "running" ? currentStep(t) : null;
       }
       if (!s.name) s.name = s.cwd ? s.cwd.split(/[\\/]/).pop() : s.id.slice(0, 8);

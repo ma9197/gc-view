@@ -46,6 +46,26 @@ assert.equal(t.pending().role, "question");
 assert.equal(t.readFrom(file), false, "nothing new to read");
 unlinkSync(file);
 
+// background work: a chat is not "done" while an agent / monitor it launched still runs
+const bgFile = join(tmpdir(), "glasscode-check-bg.jsonl"), T0 = "2026-10-21T10:00:00Z", t0 = Date.parse(T0);
+writeFileSync(bgFile,
+  L({ type: "assistant", uuid: "b1", timestamp: T0, message: { id: "n1", content: [{ type: "tool_use", id: "ag1", name: "Agent", input: { description: "Research X", prompt: "..." } }] } }) +
+  L({ type: "user", uuid: "b2", timestamp: T0, message: { content: [{ type: "tool_result", tool_use_id: "ag1", content: [{ type: "text", text: "Async agent launched successfully.\nagentId: a1b2c3d4e5" }] }] } }) +
+  L({ type: "assistant", uuid: "b3", timestamp: T0, message: { id: "n2", content: [{ type: "tool_use", id: "mo1", name: "Monitor", input: { description: "Watch training" } }] } }) +
+  L({ type: "user", uuid: "b4", timestamp: T0, message: { content: [{ type: "tool_result", tool_use_id: "mo1", content: "Monitor started (task bmon12345, expires in 30m unless the source ends first)" }] } }) +
+  L({ type: "assistant", uuid: "b5", timestamp: T0, message: { id: "n3", content: [{ type: "tool_use", id: "sh1", name: "Bash", input: { command: "echo hi", description: "Say hi" } }] } }) +
+  L({ type: "user", uuid: "b6", timestamp: T0, message: { content: [{ type: "tool_result", tool_use_id: "sh1", content: "Async agent launched? no: plain output that mentions running in background" }] } }));
+const bt = new Transcript();
+bt.readFrom(bgFile);
+assert.deepEqual(bt.background(0, t0 + 60e3).map((e) => e.desc), ["Research X", "Watch training"], "agent + monitor running; plain output ignored");
+assert.deepEqual(bt.background(0, t0 + 31 * 60e3).map((e) => e.desc), ["Research X"], "monitor gone after its expiry");
+assert.equal(bt.background(t0 + 1).length, 0, "work from before this process started is ignored");
+writeFileSync(bgFile, L({ type: "attachment", uuid: "b7", attachment: { type: "queued_command", prompt: "<task-notification>\n<task-id>a1b2c3d4e5</task-id>\n<tool-use-id>ag1</tool-use-id>\n<status>completed</status>\n</task-notification>" } }) +
+  L({ type: "assistant", uuid: "b8", message: { id: "n4", content: [{ type: "tool_use", id: "st1", name: "TaskStop", input: { task_id: "bmon12345" } }] } }), { flag: "a" });
+bt.readFrom(bgFile);
+assert.equal(bt.background(0, t0 + 60e3).length, 0, "finished agent (notice) and stopped monitor (TaskStop) are cleared");
+unlinkSync(bgFile);
+
 // relay: queue -> take, and question hold -> answer
 const sessions = { get: () => ({ id: "s1", name: "S", state: "idle" }) };
 const relay = new Relay(sessions);

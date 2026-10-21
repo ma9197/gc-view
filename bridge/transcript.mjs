@@ -9,6 +9,17 @@ const base = (p) => String(p || "").split(/[\\/]/).pop();
 const lines = (s) => String(s || "").split("\n");
 const first = (s, n = 90) => { const l = lines(s).find((x) => x.trim()) || ""; return l.length > n ? l.slice(0, n - 1) + "…" : l; };
 const clip = (s) => (s.length > MAX_TEXT ? s.slice(0, MAX_TEXT) + "\n…" : s);
+// Background work a chat started (subagents, background commands, monitors): the chat is not "done" while any runs.
+const BG_TOOLS = new Set(["Monitor", "Workflow"]);
+// only Claude Code's own launch messages, at the start of the result (command OUTPUT may mention these words)
+const BG_RESULT = {
+  Agent: /^\s*Async agent launched/i, Task: /^\s*Async agent launched/i, Monitor: /^\s*Monitor started/i, Workflow: /^\s*Workflow/i,
+  shell: /^\s*(Command running in background|Command did not complete within[^\n]*moved to the background)/i,
+};
+const launched = (name, text) => (BG_RESULT[name] || (/^(Bash|PowerShell)$/.test(name) ? BG_RESULT.shell : null))?.test(text) || false;
+const BG_ID = /(?:agentId:\s*|with ID:\s*|\(ID:\s*|\(task\s+|task[ _]?id[:=]?\s*)([A-Za-z0-9_-]{6,})/i;
+const BG_EXPIRES = /expires in (\d+)\s*(s|m|min|h)\b/i; // Monitor: "expires in 30m unless the source ends first"
+const BG_MAX_MS = 12 * 3600e3; // ponytail: a launch whose end we never saw counts as finished after 12 h
 // Tools that only feed the task list (shown as a checklist instead) or are internal plumbing.
 const QUIET = new Set(["TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "TodoWrite", "ToolSearch"]);
 
@@ -91,6 +102,7 @@ export class Transcript {
     this.images = new Map();      // image id -> { off, len, path } (where it sits in the jsonl) or { file } (image on disk)
     this.tasks = [];              // Claude's task list (TaskCreate/TaskUpdate or TodoWrite), like the CLI checklist
     this.taskCreates = new Map(); // TaskCreate tool_use id -> task waiting for its id
+    this.bg = new Map();          // background work still running: launching tool_use id -> { name, desc, time, id }
     this.offset = 0;
     this.partial = Buffer.alloc(0);
     this.title = null;
@@ -111,6 +123,8 @@ export class Transcript {
     if (d.type === "agent-name" && d.agentName && !this.title) { this.title = d.agentName; return; }
     const time = d.timestamp ? Date.parse(d.timestamp) : 0;
     if (time) this.lastActivity = Math.max(this.lastActivity, time);
+    // "<task-notification>" = a background agent or command finished (it names the step that launched it)
+    if ((d.type === "attachment" || d.type === "queue-operation" || d.type === "user") && line.includes("<task-notification>")) this.backgroundDone(line);
 
     if (d.type === "system" && d.subtype === "compact_boundary") {
       this.push({ key: d.uuid, role: "note", time, text: "Conversation compacted" });
@@ -163,6 +177,9 @@ export class Transcript {
           else this.byKey.set(key, this.push({ key: `${key}.${i}`, role: "assistant", time, text: clip(b.text) }));
         } else if (b.type === "tool_use") {
           this.trackTasks(b);
+          const bi = b.input || {};
+          if (bi.run_in_background === true || BG_TOOLS.has(b.name)) this.bg.set(b.id, { name: b.name, desc: bi.description || toolSummary(b.name, bi), time: time || Date.now() });
+          if (b.name === "TaskStop" && (bi.task_id || bi.shell_id)) this.stopBackground(String(bi.task_id || bi.shell_id));
           const input = b.input || {};
           const item = b.name === "AskUserQuestion"
             ? { key: b.id, role: "question", time, tool: b.name, question: input.questions || [], status: "pending" }
@@ -187,6 +204,14 @@ export class Transcript {
       item.status = b.is_error ? "dismissed" : "answered";
       item.answer = clip(textOf(b.content));
     } else {
+      const rtext = textOf(b.content);
+      if (!b.is_error && launched(item.name, rtext)) { // launched in the background (or moved there after a timeout)
+        const e = this.bg.get(b.tool_use_id) || { name: item.name, desc: (item.input && item.input.description) || item.summary, time: item.time || Date.now() };
+        e.id = (rtext.match(BG_ID) || [])[1] || e.id;
+        const ex = rtext.match(BG_EXPIRES);
+        if (ex) e.until = e.time + +ex[1] * ({ s: 1e3, m: 60e3, min: 60e3, h: 3600e3 })[ex[2].toLowerCase()];
+        this.bg.set(b.tool_use_id, e);
+      } else this.bg.delete(b.tool_use_id); // finished in the foreground after all
       Object.assign(item, toolOutcome(item.name, item.input, b, d.toolUseResult));
       delete item.input; // only needed until the result arrives
       const t = this.taskCreates.get(b.tool_use_id);
@@ -203,6 +228,24 @@ export class Transcript {
       });
     }
     this.version++;
+  }
+
+  backgroundDone(line) {
+    const s = line; // raw jsonl line: [\s\S] spans the escaped newlines too
+    const re =/<task-id>([^<]+)<\/task-id>(?:[\s\S]*?<tool-use-id>([^<]+)<\/tool-use-id>)?[\s\S]*?<status>([^<]+)<\/status>/g;
+    for (let m; (m = re.exec(s));) {
+      if (/^(running|pending|in_progress)$/i.test(m[3])) continue;
+      if (m[2]) this.bg.delete(m[2]);
+      this.stopBackground(m[1]);
+    }
+  }
+
+  stopBackground(id) { for (const [k, e] of this.bg) if (e.id === id) this.bg.delete(k); }
+
+  // Background work still running, ignoring anything launched before this process started (it died with the old one).
+  // Also drops monitors past their expiry and anything older than BG_MAX_MS.
+  background(sinceMs = 0, now = Date.now()) {
+    return [...this.bg.values()].filter((e) => e.time >= sinceMs && now < (e.until || e.time + BG_MAX_MS));
   }
 
   trackTasks(b) {

@@ -227,7 +227,10 @@
 
   const CLS = { running: "c-run", waiting: "c-wait", idle: "c-done", offline: "c-off" };
   const mark = (s) => (s.state === "running" ? `<span class="c-run">${dot("pulse")}</span>` : s.state === "offline" ? `<span class="c-off">${dot("ring")}</span>` : `<span class="${CLS[s.state]}">${dot()}</span>`);
+  const bgCount = (s) => (s.background ? s.background.length : 0);
   function stateText(s) {
+    // the main chat finished but agents/commands it started still run: not done yet
+    if (s.state === "running" && s.turn === "idle" && bgCount(s)) return `Waiting on ${bgCount(s)} background task${bgCount(s) > 1 ? "s" : ""}`;
     if (s.state === "running") return "Working " + dur(Date.now() - s.since);
     if (s.state === "waiting") return s.waitingFor === "question" ? "Question for you" : /permission/.test(s.waitingFor || "") ? "Needs approval" : "Waiting for you";
     return s.state === "idle" ? "Done" : "Offline";
@@ -283,7 +286,7 @@
     const t = s.tasks;
     return `<button class="card${s.state === "waiting" ? " need" : ""}" data-f data-k="s:${esc(s.id)}">
       <span class="l1">${mark(s)}<span class="nm">${esc(s.name)}</span>${isNew(s) ? '<span class="new">New</span>' : ""}</span>
-      <span class="l2"><span class="st ${CLS[s.state]}">${esc(stateText(s))}</span>${s.folder ? `<span>${esc(s.folder)}</span>` : ""}${s.state !== "running" ? `<span>${ago(s.since)}</span>` : ""}${t ? `<span>${t.done}/${t.total} tasks</span>` : ""}</span>
+      <span class="l2"><span class="st ${CLS[s.state]}">${esc(stateText(s))}</span>${s.folder ? `<span>${esc(s.folder)}</span>` : ""}${s.state !== "running" ? `<span>${ago(s.since)}</span>` : ""}${t ? `<span>${t.done}/${t.total} tasks</span>` : ""}${s.turn === "busy" && bgCount(s) ? `<span>+${bgCount(s)} in background</span>` : ""}</span>
       ${s.last ? `<span class="l3">${s.last.role === "user" ? "You: " : ""}${esc(short(s.last.text, 120))}</span>` : ""}</button>`;
   }
 
@@ -466,7 +469,7 @@
     chat.savedTop = null;
     const atBottom = saved == null && (!sc || chat.atBottom !== false), prevTop = saved != null ? saved : sc ? sc.scrollTop : 0;
     const pendingSent = (chat.sent || []).filter((m) => !m.delivered);
-    const list = prefs.steps ? steps(chat.items) : conversation(chat.items, s.state === "running");
+    const list = prefs.steps ? steps(chat.items) : conversation(chat.items, s.turn ? s.turn === "busy" : s.state === "running");
     let html = chat.start > 0 ? `<div class="note">Swipe up for older messages</div>` : "";
     html += list.map(blockHtml).join("") + tasksHtml();
     html += pendingSent.map((m) => `<div class="msg bubble"><div class="via">Sending from your glasses...</div>${esc(m.text)}</div>`).join("");
@@ -476,7 +479,7 @@
     const draft = LS.get("draft:" + chat.id, "");
     const t = chat.session && chat.session.tasks;
     const status = s.state === "running" && online
-      ? `<div class="status" data-row>${spark(true)}<span class="v">${esc((t && t.active) || "Working")} <span class="t3">&middot; <span class="el">${dur(Date.now() - s.since)}</span>${t ? ` &middot; ${t.done}/${t.total} tasks` : ""}</span></span>
+      ? `<div class="status" data-row>${spark(true)}<span class="v">${esc(s.turn === "idle" && bgCount(s) ? stateText(s) : (t && t.active) || "Working")} <span class="t3">&middot; <span class="el">${dur(Date.now() - s.since)}</span>${t ? ` &middot; ${t.done}/${t.total} tasks` : ""}${bgCount(s) ? " &middot; " + esc(s.background.map((b) => b.desc).join(", ")) : ""}</span></span>
         ${s.canSend ? `<button class="chip warn" data-f data-k="stop">${confirming("stop") ? "Pinch again to stop" : "Stop"}</button>` : ""}</div>` : "";
     const quick = s.canSend && !s.held ? `<div class="chips" data-row>${prefs.quick.map((q, i) => `<button class="chip" data-f data-k="q:${i}">${esc(q)}</button>`).join("")}</div>` : "";
     const compose = s.canSend

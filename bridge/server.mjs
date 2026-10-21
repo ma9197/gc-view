@@ -95,7 +95,7 @@ function overlay(s) {
 const publicSession = (s) => ({
   id: s.id, name: s.name, folder: s.cwd ? s.cwd.split(/[\\/]/).pop() : null, state: s.state,
   waitingFor: s.waitingFor, since: s.since, last: s.last || null, remote: s.remote, canSend: relay.canSend(s), held: s.held || null,
-  tasks: s.tasks || null, activity: s.activity || null,
+  tasks: s.tasks || null, activity: s.activity || null, background: s.background || null, turn: s.turn || null,
 });
 
 function itemsView(s, before, limit) {
